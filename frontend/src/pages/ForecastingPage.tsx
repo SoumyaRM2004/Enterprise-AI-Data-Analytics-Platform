@@ -53,7 +53,12 @@ export default function ForecastingPage() {
   const loadDatasets = async () => {
     try {
       const { data } = await datasetsAPI.list({ status: 'ready' });
-      setDatasets(data.results || data);
+      const list = data.results || data;
+      setDatasets(list);
+      if (list.length > 0) {
+        setSelectedDataset((prev) => prev || String(list[0].id));
+        setAnomalyDataset((prev) => prev || String(list[0].id));
+      }
     } catch {}
   };
 
@@ -99,8 +104,9 @@ export default function ForecastingPage() {
     }
   };
 
-  const getSelectedColumns = () => {
-    const ds = datasets.find((d) => d.id === selectedDataset);
+  const getColumnsForDataset = (datasetId: string) => {
+    if (!datasetId) return [];
+    const ds = datasets.find((d) => String(d.id) === String(datasetId));
     return ds?.column_names || [];
   };
 
@@ -172,7 +178,7 @@ export default function ForecastingPage() {
                   required
                 >
                   <option value="">Select column...</option>
-                  {getSelectedColumns().map((col) => (
+                  {getColumnsForDataset(selectedDataset).map((col) => (
                     <option key={col} value={col}>{col}</option>
                   ))}
                 </select>
@@ -185,7 +191,7 @@ export default function ForecastingPage() {
                   className="input-field"
                 >
                   <option value="">None</option>
-                  {getSelectedColumns().map((col) => (
+                  {getColumnsForDataset(selectedDataset).map((col) => (
                     <option key={col} value={col}>{col}</option>
                   ))}
                 </select>
@@ -235,7 +241,7 @@ export default function ForecastingPage() {
               required
             >
               <option value="">Select...</option>
-              {getSelectedColumns().map((col) => (
+              {getColumnsForDataset(anomalyDataset).map((col) => (
                 <option key={col} value={col}>{col}</option>
               ))}
             </select>
