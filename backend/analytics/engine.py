@@ -23,37 +23,36 @@ class DataProcessor:
         return type_map.get(ext, 'csv')
 
     def load(self) -> pd.DataFrame:
-        """Load dataset into pandas DataFrame with multi-encoding fallback support."""
+        """Load dataset into pandas DataFrame with fast encoding detection."""
         if self.df is not None:
             return self.df
 
         if self.file_type == 'csv':
             sep = '\t' if self.file_path.endswith('.tsv') else ','
-            encodings_to_try = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-8-sig']
-            loaded_df = None
-            for enc in encodings_to_try:
-                try:
-                    loaded_df = pd.read_csv(self.file_path, sep=sep, encoding=enc, low_memory=False)
-                    break
-                except (UnicodeDecodeError, UnicodeError):
-                    continue
-            if loaded_df is None:
-                loaded_df = pd.read_csv(self.file_path, sep=sep, encoding='latin-1', on_bad_lines='skip', low_memory=False)
-            self.df = loaded_df
+            encoding = 'utf-8'
+            try:
+                with open(self.file_path, 'rb') as f:
+                    chunk = f.read(131072)
+                    chunk.decode('utf-8')
+            except UnicodeDecodeError:
+                encoding = 'latin-1'
+
+            try:
+                self.df = pd.read_csv(self.file_path, sep=sep, encoding=encoding, low_memory=False)
+            except Exception:
+                self.df = pd.read_csv(self.file_path, sep=sep, encoding='latin-1', on_bad_lines='skip', low_memory=False)
+
         elif self.file_type == 'xlsx':
             self.df = pd.read_excel(self.file_path, engine='openpyxl')
         else:
-            encodings_to_try = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
-            loaded_df = None
-            for enc in encodings_to_try:
-                try:
-                    loaded_df = pd.read_csv(self.file_path, encoding=enc, low_memory=False)
-                    break
-                except (UnicodeDecodeError, UnicodeError):
-                    continue
-            if loaded_df is None:
-                loaded_df = pd.read_csv(self.file_path, encoding='latin-1', on_bad_lines='skip', low_memory=False)
-            self.df = loaded_df
+            encoding = 'utf-8'
+            try:
+                with open(self.file_path, 'rb') as f:
+                    chunk = f.read(131072)
+                    chunk.decode('utf-8')
+            except UnicodeDecodeError:
+                encoding = 'latin-1'
+            self.df = pd.read_csv(self.file_path, encoding=encoding, low_memory=False)
         return self.df
 
     def process(self) -> Dict[str, Any]:
@@ -101,15 +100,18 @@ class DataProcessor:
         return round(float(val), round_digits)
 
     def _create_profile(self) -> Dict[str, Any]:
-        """Create detailed statistical profile of the dataset."""
+        """Create detailed statistical profile of the dataset (using sampling for large files)."""
         profile = {}
+        
+        # Use sampling for expensive statistical metrics if dataset exceeds 50,000 rows
+        stat_df = self.df if len(self.df) <= 50000 else self.df.sample(50000, random_state=42)
 
         for col in self.df.columns:
             col_info = {
                 'dtype': str(self.df[col].dtype),
                 'null_count': int(self.df[col].isnull().sum()),
                 'null_percent': round(float(self.df[col].isnull().sum() / len(self.df) * 100), 2),
-                'unique_count': int(self.df[col].nunique()),
+                'unique_count': int(stat_df[col].nunique()),
             }
 
             if self.df[col].dtype in ['int64', 'float64', 'int32', 'float32']:
@@ -117,13 +119,13 @@ class DataProcessor:
                     'min': self._safe_float(self.df[col].min()),
                     'max': self._safe_float(self.df[col].max()),
                     'mean': self._safe_float(self.df[col].mean()),
-                    'median': self._safe_float(self.df[col].median()),
-                    'std': self._safe_float(self.df[col].std()),
+                    'median': self._safe_float(stat_df[col].median()),
+                    'std': self._safe_float(stat_df[col].std()),
                 })
 
                 # Percentiles
                 try:
-                    percentiles = self.df[col].quantile([0.25, 0.5, 0.75])
+                    percentiles = stat_df[col].quantile([0.25, 0.5, 0.75])
                     col_info['percentiles'] = {
                         'p25': self._safe_float(percentiles.iloc[0]),
                         'p50': self._safe_float(percentiles.iloc[1]),
@@ -133,12 +135,12 @@ class DataProcessor:
                     pass
 
                 # Skewness and kurtosis
-                if len(self.df[col].dropna()) > 2:
-                    col_info['skewness'] = self._safe_float(self.df[col].skew())
-                    col_info['kurtosis'] = self._safe_float(self.df[col].kurtosis())
+                if len(stat_df[col].dropna()) > 2:
+                    col_info['skewness'] = self._safe_float(stat_df[col].skew())
+                    col_info['kurtosis'] = self._safe_float(stat_df[col].kurtosis())
 
             elif self.df[col].dtype == 'object':
-                top_dict = self.df[col].value_counts().head(5).to_dict()
+                top_dict = stat_df[col].value_counts().head(5).to_dict()
                 col_info['top_values'] = {str(k): int(v) for k, v in top_dict.items()}
 
             profile[col] = col_info

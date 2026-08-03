@@ -81,10 +81,26 @@ class DatasetUploadView(APIView):
         dataset.status = Dataset.Status.PROCESSING
         dataset.save()
 
-        # Launch Celery task
-        task = process_dataset_task.delay(str(dataset.id))
-        dataset.celery_task_id = task.id
+        # Launch Celery task in background thread if Celery is running eagerly locally
+        from django.conf import settings
+        import threading
+        import uuid
+
+        task_id = str(uuid.uuid4())
+        dataset.celery_task_id = task_id
         dataset.save()
+
+        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            thread = threading.Thread(
+                target=process_dataset_task,
+                args=(str(dataset.id),),
+                daemon=True
+            )
+            thread.start()
+        else:
+            task = process_dataset_task.delay(str(dataset.id))
+            dataset.celery_task_id = task.id
+            dataset.save()
 
         AuditLog.objects.create(
             user=request.user,
