@@ -174,12 +174,53 @@ class OpenRouterProvider(LLMProvider):
             return {'content': f"Error: {str(e)}", 'error': str(e)}
 
 
+class GroqProvider(LLMProvider):
+    """Groq API provider (Free fast Llama 3 models)."""
+
+    def __init__(self, api_key: str, model: str = 'llama-3.3-70b-versatile'):
+        self.api_key = api_key
+        self.model = model or 'llama-3.3-70b-versatile'
+
+    def generate(self, messages: List[Dict[str, str]], temperature: float = 0.7) -> Dict[str, Any]:
+        try:
+            import requests
+
+            headers = {
+                'Authorization': f'Bearer {self.api_key}',
+                'Content-Type': 'application/json',
+            }
+
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers=headers,
+                json={
+                    'model': self.model,
+                    'messages': messages,
+                    'temperature': temperature,
+                    'max_tokens': 2048,
+                },
+                timeout=60,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+            return {
+                'content': data['choices'][0]['message']['content'],
+                'model': data.get('model', self.model),
+                'usage': data.get('usage', {}),
+            }
+        except Exception as e:
+            logger.error(f"Groq API error: {e}")
+            return {'content': f"Error: {str(e)}", 'error': str(e)}
+
+
 class LLMProviderFactory:
     """Factory to create the appropriate LLM provider based on configuration."""
 
     PROVIDERS = {
         'openai': OpenAIProvider,
         'gemini': GeminiProvider,
+        'groq': GroqProvider,
         'ollama': OllamaProvider,
         'openrouter': OpenRouterProvider,
         'openai_compatible': OpenAIProvider,
@@ -188,34 +229,38 @@ class LLMProviderFactory:
     @classmethod
     def create(cls, provider_name: Optional[str] = None) -> LLMProvider:
         """Create an LLM provider instance based on settings."""
-        provider_name = provider_name or settings.LLM_PROVIDER
+        provider_name = provider_name or getattr(settings, 'LLM_PROVIDER', 'openai_compatible')
 
         if provider_name == 'openai':
             return OpenAIProvider(
-                api_key=settings.OPENAI_API_KEY,
-                model=settings.LLM_MODEL_NAME,
+                api_key=getattr(settings, 'OPENAI_API_KEY', ''),
+                model=getattr(settings, 'LLM_MODEL_NAME', 'gpt-4o-mini'),
             )
         elif provider_name == 'gemini':
             return GeminiProvider(
-                api_key=settings.GEMINI_API_KEY,
-                model=settings.LLM_MODEL_NAME or 'gemini-2.0-flash',
+                api_key=getattr(settings, 'GEMINI_API_KEY', ''),
+                model=getattr(settings, 'LLM_MODEL_NAME', 'gemini-2.0-flash') or 'gemini-2.0-flash',
+            )
+        elif provider_name == 'groq':
+            return GroqProvider(
+                api_key=getattr(settings, 'GROQ_API_KEY', ''),
+                model=getattr(settings, 'LLM_MODEL_NAME', 'llama-3.3-70b-versatile') or 'llama-3.3-70b-versatile',
             )
         elif provider_name == 'ollama':
             return OllamaProvider(
-                base_url=settings.OLLAMA_BASE_URL,
-                model=settings.LLM_MODEL_NAME or 'llama3',
+                base_url=getattr(settings, 'OLLAMA_BASE_URL', 'http://localhost:11434'),
+                model=getattr(settings, 'LLM_MODEL_NAME', 'llama3') or 'llama3',
             )
         elif provider_name == 'openrouter':
             return OpenRouterProvider(
-                api_key=settings.OPENAI_API_KEY,
-                model=settings.LLM_MODEL_NAME,
+                api_key=getattr(settings, 'OPENAI_API_KEY', ''),
+                model=getattr(settings, 'LLM_MODEL_NAME', 'google/gemma-2-9b-it:free') or 'google/gemma-2-9b-it:free',
             )
         elif provider_name == 'openai_compatible':
-            # Generic OpenAI-compatible endpoint (works with any OpenAI-compatible API)
             return OpenAIProvider(
-                api_key=settings.OPENAI_API_KEY or 'dummy-key',
-                model=settings.LLM_MODEL_NAME or 'gpt-4o-mini',
-                base_url=settings.OPENAI_API_BASE,
+                api_key=getattr(settings, 'OPENAI_API_KEY', 'dummy-key') or 'dummy-key',
+                model=getattr(settings, 'LLM_MODEL_NAME', 'gpt-4o-mini') or 'gpt-4o-mini',
+                base_url=getattr(settings, 'OPENAI_API_BASE', None) or None,
             )
         else:
             raise ValueError(f"Unknown LLM provider: {provider_name}. Supported: {list(cls.PROVIDERS.keys())}")
@@ -236,13 +281,15 @@ class LLMProviderFactory:
     def _check_provider_available(cls, provider_name: str) -> bool:
         """Check if a provider has the required credentials."""
         if provider_name == 'openai':
-            return bool(settings.OPENAI_API_KEY)
+            return bool(getattr(settings, 'OPENAI_API_KEY', ''))
         elif provider_name == 'gemini':
-            return bool(settings.GEMINI_API_KEY)
+            return bool(getattr(settings, 'GEMINI_API_KEY', ''))
+        elif provider_name == 'groq':
+            return bool(getattr(settings, 'GROQ_API_KEY', ''))
         elif provider_name == 'ollama':
-            return True  # Local, always available if running
+            return True
         elif provider_name == 'openrouter':
-            return bool(settings.OPENAI_API_KEY)
+            return bool(getattr(settings, 'OPENAI_API_KEY', ''))
         elif provider_name == 'openai_compatible':
-            return bool(settings.OPENAI_API_BASE)
+            return bool(getattr(settings, 'OPENAI_API_BASE', ''))
         return False

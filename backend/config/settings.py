@@ -171,6 +171,7 @@ LLM_PROVIDER = env('LLM_PROVIDER', default='openai_compatible')
 OPENAI_API_BASE = env('OPENAI_API_BASE', default='')
 OPENAI_API_KEY = env('OPENAI_API_KEY', default='')
 GEMINI_API_KEY = env('GEMINI_API_KEY', default='')
+GROQ_API_KEY = env('GROQ_API_KEY', default='')
 OLLAMA_BASE_URL = env('OLLAMA_BASE_URL', default='http://localhost:11434')
 LLM_MODEL_NAME = env('LLM_MODEL_NAME', default='gpt-4o-mini')
 
