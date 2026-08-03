@@ -23,14 +23,37 @@ class DataProcessor:
         return type_map.get(ext, 'csv')
 
     def load(self) -> pd.DataFrame:
-        """Load dataset into pandas DataFrame."""
+        """Load dataset into pandas DataFrame with multi-encoding fallback support."""
+        if self.df is not None:
+            return self.df
+
         if self.file_type == 'csv':
             sep = '\t' if self.file_path.endswith('.tsv') else ','
-            self.df = pd.read_csv(self.file_path, sep=sep, low_memory=False)
+            encodings_to_try = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252', 'utf-8-sig']
+            loaded_df = None
+            for enc in encodings_to_try:
+                try:
+                    loaded_df = pd.read_csv(self.file_path, sep=sep, encoding=enc, low_memory=False)
+                    break
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
+            if loaded_df is None:
+                loaded_df = pd.read_csv(self.file_path, sep=sep, encoding='latin-1', on_bad_lines='skip', low_memory=False)
+            self.df = loaded_df
         elif self.file_type == 'xlsx':
             self.df = pd.read_excel(self.file_path, engine='openpyxl')
         else:
-            self.df = pd.read_csv(self.file_path, low_memory=False)
+            encodings_to_try = ['utf-8', 'latin-1', 'iso-8859-1', 'cp1252']
+            loaded_df = None
+            for enc in encodings_to_try:
+                try:
+                    loaded_df = pd.read_csv(self.file_path, encoding=enc, low_memory=False)
+                    break
+                except (UnicodeDecodeError, UnicodeError):
+                    continue
+            if loaded_df is None:
+                loaded_df = pd.read_csv(self.file_path, encoding='latin-1', on_bad_lines='skip', low_memory=False)
+            self.df = loaded_df
         return self.df
 
     def process(self) -> Dict[str, Any]:
@@ -71,6 +94,12 @@ class DataProcessor:
                 types[col] = 'other'
         return types
 
+    def _safe_float(self, val, round_digits=4) -> Optional[float]:
+        """Convert float safely, converting NaN and Inf to None."""
+        if pd.isna(val) or np.isinf(val):
+            return None
+        return round(float(val), round_digits)
+
     def _create_profile(self) -> Dict[str, Any]:
         """Create detailed statistical profile of the dataset."""
         profile = {}
@@ -85,32 +114,32 @@ class DataProcessor:
 
             if self.df[col].dtype in ['int64', 'float64', 'int32', 'float32']:
                 col_info.update({
-                    'min': float(self.df[col].min()) if not pd.isna(self.df[col].min()) else None,
-                    'max': float(self.df[col].max()) if not pd.isna(self.df[col].max()) else None,
-                    'mean': round(float(self.df[col].mean()), 4) if not pd.isna(self.df[col].mean()) else None,
-                    'median': round(float(self.df[col].median()), 4) if not pd.isna(self.df[col].median()) else None,
-                    'std': round(float(self.df[col].std()), 4) if not pd.isna(self.df[col].std()) else None,
+                    'min': self._safe_float(self.df[col].min()),
+                    'max': self._safe_float(self.df[col].max()),
+                    'mean': self._safe_float(self.df[col].mean()),
+                    'median': self._safe_float(self.df[col].median()),
+                    'std': self._safe_float(self.df[col].std()),
                 })
 
                 # Percentiles
                 try:
                     percentiles = self.df[col].quantile([0.25, 0.5, 0.75])
                     col_info['percentiles'] = {
-                        'p25': round(float(percentiles.iloc[0]), 4),
-                        'p50': round(float(percentiles.iloc[1]), 4),
-                        'p75': round(float(percentiles.iloc[2]), 4),
+                        'p25': self._safe_float(percentiles.iloc[0]),
+                        'p50': self._safe_float(percentiles.iloc[1]),
+                        'p75': self._safe_float(percentiles.iloc[2]),
                     }
                 except Exception:
                     pass
 
                 # Skewness and kurtosis
                 if len(self.df[col].dropna()) > 2:
-                    col_info['skewness'] = round(float(self.df[col].skew()), 4)
-                    col_info['kurtosis'] = round(float(self.df[col].kurtosis()), 4)
+                    col_info['skewness'] = self._safe_float(self.df[col].skew())
+                    col_info['kurtosis'] = self._safe_float(self.df[col].kurtosis())
 
             elif self.df[col].dtype == 'object':
-                col_info['top_values'] = self.df[col].value_counts().head(5).to_dict()
-                col_info['top_values'] = {str(k): int(v) for k, v in col_info['top_values'].items()}
+                top_dict = self.df[col].value_counts().head(5).to_dict()
+                col_info['top_values'] = {str(k): int(v) for k, v in top_dict.items()}
 
             profile[col] = col_info
 
