@@ -17,7 +17,7 @@ interface Message {
 interface Session {
   id: number;
   title: string;
-  dataset: number | null;
+  dataset: string | number | null;
   dataset_name: string | null;
   session_type: string;
 }
@@ -29,7 +29,7 @@ export default function ChatPage() {
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [datasets, setDatasets] = useState<any[]>([]);
-  const [selectedDataset, setSelectedDataset] = useState<number | null>(null);
+  const [selectedDataset, setSelectedDataset] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,68 +51,77 @@ export default function ChatPage() {
   const loadDatasets = async () => {
     try {
       const { data } = await datasetsAPI.list({ status: 'ready' });
-      setDatasets(data.results || data);
+      const list = data.results || data;
+      setDatasets(list);
+      if (list.length > 0) {
+        setSelectedDataset((prev) => prev || String(list[0].id));
+      }
     } catch {}
   };
 
-  const createSession = async () => {
+  const createSession = async (overrideDataset?: string | null) => {
+    const dsId = overrideDataset !== undefined ? overrideDataset : selectedDataset;
     try {
       const { data } = await chatbotAPI.createSession({
-        dataset: selectedDataset,
+        dataset: dsId || null,
         title: 'New Chat',
-        session_type: selectedDataset ? 'nl_to_sql' : 'general',
+        session_type: dsId ? 'nl_to_sql' : 'general',
       });
-      setSessions([data, ...sessions]);
+      setSessions((prev) => [data, ...prev]);
       setCurrentSession(data);
       setMessages([]);
+      return data;
     } catch {
       toast.error('Failed to create session');
+      return null;
     }
   };
 
   const selectSession = async (session: Session) => {
     setCurrentSession(session);
-    setSelectedDataset(session.dataset);
+    if (session.dataset) {
+      setSelectedDataset(String(session.dataset));
+    }
     try {
       const { data } = await chatbotAPI.getSession(session.id);
       setMessages(data.messages || []);
     } catch {}
   };
 
-  const sendMessage = async () => {
-    if (!input.trim() || !currentSession) return;
+  const sendMessage = async (textOverride?: string) => {
+    const textToSend = (textOverride || input).trim();
+    if (!textToSend) return;
+
+    let activeSession = currentSession;
+    if (!activeSession) {
+      activeSession = await createSession();
+      if (!activeSession) return;
+    }
 
     const userMsg: Message = {
       role: 'user',
-      content: input,
+      content: textToSend,
       message_type: 'text',
     };
-    setMessages([...messages, userMsg]);
+    setMessages((prev) => [...prev, userMsg]);
     setInput('');
     setIsSending(true);
 
     try {
-      const { data } = await chatbotAPI.sendMessage(currentSession.id, {
+      const { data } = await chatbotAPI.sendMessage(activeSession.id, {
         message: userMsg.content,
         message_type: userMsg.message_type,
       });
 
-      setMessages([
-        ...messages,
-        userMsg,
-        data.assistant_message,
-      ]);
+      setMessages((prev) => [...prev, data.assistant_message]);
 
-      // Update session title if it's the first message
-      if (messages.length === 0 && data.user_message.content) {
-        setCurrentSession({
-          ...currentSession,
-          title: data.user_message.content.substring(0, 50),
-        });
+      if (data.user_message?.content) {
+        setCurrentSession((prevSession) =>
+          prevSession ? { ...prevSession, title: data.user_message.content.substring(0, 50) } : null
+        );
       }
     } catch {
       toast.error('Failed to send message');
-      setMessages(messages.filter((_, i) => i !== messages.length));
     } finally {
       setIsSending(false);
     }
@@ -137,7 +146,7 @@ export default function ChatPage() {
       <div className="w-72 bg-white rounded-xl border border-gray-200 flex flex-col">
         <div className="p-4 border-b border-gray-200">
           <button
-            onClick={createSession}
+            onClick={() => createSession()}
             className="btn-primary w-full flex items-center justify-center gap-2"
           >
             <Plus size={16} />
@@ -147,9 +156,13 @@ export default function ChatPage() {
 
         {/* Dataset selector */}
         <div className="p-4 border-b border-gray-200">
+          <label className="text-xs font-medium text-gray-500 mb-1 block">Dataset Context</label>
           <select
             value={selectedDataset || ''}
-            onChange={(e) => setSelectedDataset(e.target.value ? Number(e.target.value) : null)}
+            onChange={(e) => {
+              const dsId = e.target.value || null;
+              setSelectedDataset(dsId);
+            }}
             className="input-field text-sm"
           >
             <option value="">Select dataset (optional)</option>
@@ -189,31 +202,31 @@ export default function ChatPage() {
 
       {/* Chat Area */}
       <div className="flex-1 bg-white rounded-xl border border-gray-200 flex flex-col">
-        {!currentSession ? (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center">
-              <Brain className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-              <h2 className="text-xl font-semibold text-gray-900 mb-2">AI Analytics Assistant</h2>
-              <p className="text-gray-500 max-w-md">
-                Ask questions about your data, generate SQL queries, create visualizations, and get AI-powered insights.
-              </p>
-              <div className="mt-6 flex flex-wrap gap-2 justify-center">
-                {['Show monthly sales trends', 'Find top products', 'Detect anomalies', 'Predict next quarter'].map((q) => (
-                  <button
-                    key={q}
-                    onClick={() => { setInput(q); }}
-                    className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-sm text-gray-700"
-                  >
-                    {q}
-                  </button>
-                ))}
+        {/* Messages view */}
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          {!currentSession && messages.length === 0 ? (
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center py-12">
+                <Brain className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <h2 className="text-xl font-semibold text-gray-900 mb-2">AI Analytics Assistant</h2>
+                <p className="text-gray-500 max-w-md mx-auto">
+                  Ask questions about your data, generate SQL queries, create visualizations, and get AI-powered insights.
+                </p>
+                <div className="mt-6 flex flex-wrap gap-2 justify-center">
+                  {['Show monthly sales trends', 'Find top products', 'Detect anomalies', 'Predict next quarter'].map((q) => (
+                    <button
+                      key={q}
+                      onClick={() => sendMessage(q)}
+                      className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-sm text-gray-700 transition-colors"
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
-          </div>
-        ) : (
-          <>
-            {/* Messages */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          ) : (
+            <>
               {messages.map((msg, idx) => (
                 <div
                   key={idx}
@@ -242,7 +255,7 @@ export default function ChatPage() {
                           Results: {msg.query_result.data.row_count} rows
                         </p>
                         <div className="overflow-x-auto max-h-64">
-                          <table className="text-xs">
+                          <table className="text-xs w-full">
                             <thead>
                               <tr className="border-b border-gray-200">
                                 {msg.query_result.data.columns?.map((col: string) => (
@@ -300,32 +313,32 @@ export default function ChatPage() {
                   </div>
                 </div>
               )}
-              <div ref={messagesEndRef} />
-            </div>
+            </>
+          )}
+          <div ref={messagesEndRef} />
+        </div>
 
-            {/* Input */}
-            <div className="p-4 border-t border-gray-200">
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-                  placeholder="Ask about your data..."
-                  className="input-field flex-1"
-                  disabled={isSending}
-                />
-                <button
-                  onClick={sendMessage}
-                  disabled={!input.trim() || isSending}
-                  className="btn-primary px-4 disabled:opacity-50"
-                >
-                  <Send size={18} />
-                </button>
-              </div>
-            </div>
-          </>
-        )}
+        {/* Input */}
+        <div className="p-4 border-t border-gray-200">
+          <div className="flex gap-3">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+              placeholder="Ask about your data..."
+              className="input-field flex-1"
+              disabled={isSending}
+            />
+            <button
+              onClick={() => sendMessage()}
+              disabled={!input.trim() || isSending}
+              className="btn-primary px-4 disabled:opacity-50"
+            >
+              <Send size={18} />
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );

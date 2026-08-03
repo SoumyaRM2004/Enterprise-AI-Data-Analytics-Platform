@@ -32,7 +32,6 @@ class ChatSessionCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = ChatSession
         fields = ['dataset', 'title', 'session_type']
-        read_only_fields = ['dataset']
 
 
 class ChatSendSerializer(serializers.Serializer):
