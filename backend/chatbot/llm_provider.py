@@ -183,31 +183,27 @@ class GroqProvider(LLMProvider):
 
     def generate(self, messages: List[Dict[str, str]], temperature: float = 0.7) -> Dict[str, Any]:
         try:
-            import requests
-
-            headers = {
-                'Authorization': f'Bearer {self.api_key}',
-                'Content-Type': 'application/json',
-            }
-
-            response = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                headers=headers,
-                json={
-                    'model': self.model,
-                    'messages': messages,
-                    'temperature': temperature,
-                    'max_tokens': 2048,
-                },
-                timeout=60,
+            import openai
+            client = openai.OpenAI(
+                api_key=self.api_key,
+                base_url='https://api.groq.com/openai/v1',
             )
-            response.raise_for_status()
-            data = response.json()
+
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=2048,
+            )
 
             return {
-                'content': data['choices'][0]['message']['content'],
-                'model': data.get('model', self.model),
-                'usage': data.get('usage', {}),
+                'content': response.choices[0].message.content,
+                'model': self.model,
+                'usage': {
+                    'prompt_tokens': response.usage.prompt_tokens if response.usage else 0,
+                    'completion_tokens': response.usage.completion_tokens if response.usage else 0,
+                    'total_tokens': response.usage.total_tokens if response.usage else 0,
+                },
             }
         except Exception as e:
             logger.error(f"Groq API error: {e}")
