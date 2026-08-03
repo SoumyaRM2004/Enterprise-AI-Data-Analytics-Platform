@@ -20,28 +20,32 @@ class SQLExecutor:
         self.df = df.copy()
 
     def execute(self, sql: str) -> Dict[str, Any]:
-        """Parse and execute SQL query on the DataFrame."""
-        sql = sql.strip()
+        """Execute SQL query safely using in-memory SQLite / pandas execution."""
+        import sqlite3
+
+        sql_clean = sql.strip().rstrip(';')
 
         # Security checks
-        if len(sql) > self.MAX_QUERY_LENGTH:
+        if len(sql_clean) > self.MAX_QUERY_LENGTH:
             raise ValueError(f"Query too long. Maximum {self.MAX_QUERY_LENGTH} characters.")
 
-        sql_upper = sql.upper()
+        sql_upper = sql_clean.upper()
         for keyword in self.FORBIDDEN_KEYWORDS:
-            if keyword in sql_upper and keyword not in ['SELECT']:
+            if keyword in sql_upper:
                 raise ValueError(f"Forbidden SQL keyword: {keyword}")
 
-        sql = sql.replace('`', '"')
-        from sqlglot import parse as sqlglot_parse
-
+        # Execute via SQLite in-memory engine
         try:
-            parsed = sqlglot_parse(sql)
-        except Exception:
-            raise ValueError("Could not parse SQL query.")
-
-        # Parse the query and execute using pandas operations
-        return self._execute_parsed(sql)
+            conn = sqlite3.connect(':memory:')
+            self.df.to_sql('df', conn, index=False, if_exists='replace')
+            res_df = pd.read_sql_query(sql_clean, conn)
+            conn.close()
+            return self._result_to_dict(res_df, len(self.df))
+        except Exception as sqlite_err:
+            try:
+                return self._execute_parsed(sql_clean)
+            except Exception:
+                raise ValueError(f"Could not execute SQL query: {sqlite_err}")
 
     def _execute_parsed(self, sql: str) -> Dict[str, Any]:
         """Execute parsed SQL query using pandas."""
