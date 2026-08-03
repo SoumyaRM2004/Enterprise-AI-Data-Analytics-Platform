@@ -118,9 +118,11 @@ export const forecastingAPI = {
   create: (datasetId: string, data: any) =>
     api.post(`/forecasting/${datasetId}/create/`, data),
   getDetail: (id: number) => api.get(`/forecasting/${id}/detail/`),
+  delete: (id: number) => api.delete(`/forecasting/${id}/`),
   getAnomalies: () => api.get('/forecasting/anomalies/'),
   createAnomalyDetection: (datasetId: string, data: any) =>
     api.post(`/forecasting/${datasetId}/anomalies/`, data),
+  deleteAnomaly: (id: number) => api.delete(`/forecasting/anomalies/${id}/`),
 };
 
 // Reports API

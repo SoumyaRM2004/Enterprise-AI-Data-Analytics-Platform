@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { forecastingAPI, datasetsAPI } from '../services/api';
-import { TrendingUp, AlertTriangle, Play, BarChart3 } from 'lucide-react';
+import { TrendingUp, AlertTriangle, Play, BarChart3, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface ForecastModel {
@@ -89,7 +89,7 @@ export default function ForecastingPage() {
       await forecastingAPI.create(selectedDataset, form);
       toast.success('Forecast model created!');
       setShowForm(false);
-      loadModels();
+      setTimeout(loadModels, 1500);
     } catch {
       toast.error('Failed to create forecast');
     } finally {
@@ -106,9 +106,29 @@ export default function ForecastingPage() {
         column: anomalyForm.target_column,
       });
       toast.success('Anomaly detection started!');
-      loadAnomalies();
+      setTimeout(loadAnomalies, 1500);
     } catch {
       toast.error('Failed to start anomaly detection');
+    }
+  };
+
+  const handleDeleteModel = async (id: number) => {
+    try {
+      await forecastingAPI.delete(id);
+      toast.success('Forecast model deleted');
+      loadModels();
+    } catch {
+      toast.error('Failed to delete forecast model');
+    }
+  };
+
+  const handleDeleteAnomaly = async (id: number) => {
+    try {
+      await forecastingAPI.deleteAnomaly(id);
+      toast.success('Anomaly detection result deleted');
+      loadAnomalies();
+    } catch {
+      toast.error('Failed to delete anomaly result');
     }
   };
 
@@ -292,13 +312,22 @@ export default function ForecastingPage() {
                       </p>
                     </div>
                   </div>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                    model.status === 'completed' ? 'bg-green-100 text-green-700' :
-                    model.status === 'running' ? 'bg-yellow-100 text-yellow-700' :
-                    'bg-gray-100 text-gray-700'
-                  }`}>
-                    {model.status}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                      model.status === 'completed' ? 'bg-green-100 text-green-700' :
+                      model.status === 'running' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-gray-100 text-gray-700'
+                    }`}>
+                      {model.status}
+                    </span>
+                    <button
+                      onClick={() => handleDeleteModel(model.id)}
+                      title="Delete Model"
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
                 {model.metrics && Object.keys(model.metrics).length > 0 && (
                   <div className="mt-3 grid grid-cols-3 gap-4">
@@ -340,13 +369,22 @@ export default function ForecastingPage() {
                       </p>
                     </div>
                   </div>
-                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
-                    a.status === 'completed' ? 'bg-green-100 text-green-700' :
-                    a.status === 'running' ? 'bg-yellow-100 text-yellow-700' :
-                    'bg-green-100 text-green-700'
-                  }`}>
-                    {a.status || 'completed'}
-                  </span>
+                  <div className="flex items-center gap-3">
+                    <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                      a.status === 'completed' ? 'bg-green-100 text-green-700' :
+                      a.status === 'running' ? 'bg-yellow-100 text-yellow-700' :
+                      'bg-green-100 text-green-700'
+                    }`}>
+                      {a.status || 'completed'}
+                    </span>
+                    <button
+                      onClick={() => handleDeleteAnomaly(a.id)}
+                      title="Delete Anomaly Result"
+                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                 </div>
               );
             })}

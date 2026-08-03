@@ -59,7 +59,7 @@ class ForecastCreateView(APIView):
         forecast.save()
 
         if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
-            thread = threading.Thread(target=run_forecast_task, args=(forecast.id,), daemon=True)
+            thread = threading.Thread(target=lambda: run_forecast_task.apply(args=(forecast.id,)), daemon=True)
             thread.start()
         else:
             task = run_forecast_task.delay(forecast.id)
@@ -77,8 +77,8 @@ class ForecastCreateView(APIView):
         return Response(ForecastModelSerializer(forecast).data, status=status.HTTP_201_CREATED)
 
 
-class ForecastDetailView(generics.RetrieveAPIView):
-    """Get forecast details and results."""
+class ForecastDetailView(generics.RetrieveDestroyAPIView):
+    """Get or delete forecast model."""
     serializer_class = ForecastModelSerializer
 
     def get_queryset(self):
@@ -87,6 +87,14 @@ class ForecastDetailView(generics.RetrieveAPIView):
 
 class AnomalyDetectionListView(generics.ListAPIView):
     """List anomaly detection results."""
+    serializer_class = AnomalyDetectionSerializer
+
+    def get_queryset(self):
+        return AnomalyDetection.objects.filter(owner=self.request.user)
+
+
+class AnomalyDetectionDetailView(generics.RetrieveDestroyAPIView):
+    """Get or delete anomaly detection result."""
     serializer_class = AnomalyDetectionSerializer
 
     def get_queryset(self):
@@ -119,8 +127,19 @@ class AnomalyDetectionCreateView(APIView):
             status='running',
         )
 
-        task = run_anomaly_detection_task.delay(detection.id)
-        detection.celery_task_id = task.id
+        from django.conf import settings
+        import threading
+        import uuid
+
+        detection.celery_task_id = str(uuid.uuid4())
         detection.save()
+
+        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            thread = threading.Thread(target=lambda: run_anomaly_detection_task.apply(args=(detection.id,)), daemon=True)
+            thread.start()
+        else:
+            task = run_anomaly_detection_task.delay(detection.id)
+            detection.celery_task_id = task.id
+            detection.save()
 
         return Response(AnomalyDetectionSerializer(detection).data, status=status.HTTP_201_CREATED)
