@@ -179,7 +179,10 @@ class GroqProvider(LLMProvider):
 
     def __init__(self, api_key: str, model: str = 'llama-3.3-70b-versatile'):
         self.api_key = api_key
-        self.model = model or 'llama-3.3-70b-versatile'
+        if not model or model == 'gpt-4o-mini' or 'gpt' in model.lower():
+            self.model = 'llama-3.3-70b-versatile'
+        else:
+            self.model = model
 
     def generate(self, messages: List[Dict[str, str]], temperature: float = 0.7) -> Dict[str, Any]:
         try:
