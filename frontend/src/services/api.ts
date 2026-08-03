@@ -129,6 +129,7 @@ export const reportsAPI = {
   generate: (datasetId: string, data?: any) =>
     api.post(`/reports/${datasetId}/generate/`, data),
   getDetail: (id: number) => api.get(`/reports/${id}/`),
+  delete: (id: number) => api.delete(`/reports/${id}/`),
   download: (id: number) =>
     api.get(`/reports/${id}/download/`, { responseType: 'blob' }),
   getScheduled: () => api.get('/reports/scheduled/'),

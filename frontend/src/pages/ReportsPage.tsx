@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { reportsAPI, datasetsAPI } from '../services/api';
-import { FileText, Download, Clock, Plus, CheckCircle, XCircle, RefreshCw } from 'lucide-react';
+import { FileText, Download, Clock, Plus, CheckCircle, XCircle, RefreshCw, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 interface Report {
@@ -61,11 +61,27 @@ export default function ReportsPage() {
     try {
       await reportsAPI.generate(selectedDataset, { report_type: 'dataset_analysis' });
       toast.success('Report generation started!');
-      setTimeout(loadReports, 3000);
+      setTimeout(loadReports, 2000);
     } catch {
       toast.error('Failed to generate report');
     } finally {
       setIsGenerating(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setIsGenerating(false);
+    setSelectedDataset('');
+    toast.success('Report generation cancelled');
+  };
+
+  const handleDeleteReport = async (id: number) => {
+    try {
+      await reportsAPI.delete(id);
+      toast.success('Report deleted');
+      loadReports();
+    } catch {
+      toast.error('Failed to delete report');
     }
   };
 
@@ -120,7 +136,7 @@ export default function ReportsPage() {
       {/* Generate Report */}
       <div className="card">
         <h2 className="text-lg font-semibold text-gray-900 mb-4">Generate Report</h2>
-        <div className="flex gap-4">
+        <div className="flex items-center gap-4 flex-wrap">
           <select
             value={selectedDataset}
             onChange={(e) => setSelectedDataset(e.target.value)}
@@ -138,6 +154,15 @@ export default function ReportsPage() {
           >
             <FileText size={16} />
             {isGenerating ? 'Generating...' : 'Generate PDF Report'}
+          </button>
+          <button
+            type="button"
+            onClick={handleCancel}
+            disabled={!selectedDataset && !isGenerating}
+            className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500 flex items-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <XCircle size={16} className="text-red-500" />
+            Cancel
           </button>
         </div>
       </div>
@@ -219,6 +244,13 @@ export default function ReportsPage() {
                       Download
                     </button>
                   )}
+                  <button
+                    onClick={() => handleDeleteReport(report.id)}
+                    title="Delete / Cancel Report"
+                    className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                  >
+                    <Trash2 size={16} />
+                  </button>
                 </div>
               </div>
             ))}

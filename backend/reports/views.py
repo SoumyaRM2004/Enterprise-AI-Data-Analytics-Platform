@@ -79,8 +79,8 @@ class ReportCreateView(APIView):
         return Response(ReportSerializer(report).data, status=status.HTTP_201_CREATED)
 
 
-class ReportDetailView(generics.RetrieveAPIView):
-    """Get report details."""
+class ReportDetailView(generics.RetrieveDestroyAPIView):
+    """Get or delete a report."""
     serializer_class = ReportSerializer
 
     def get_queryset(self):
