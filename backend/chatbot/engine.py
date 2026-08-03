@@ -58,15 +58,20 @@ Be helpful, concise, and accurate. Use the dataset schema to inform your answers
         intent = self._classify_intent(message, dataset_profile)
 
         if intent == 'sql':
-            return self._handle_nl_to_sql(message, schema_context, chat_history)
+            res = self._handle_nl_to_sql(message, schema_context, chat_history, dataset_profile)
         elif intent == 'insight':
-            return self._handle_insight_request(message, schema_context, dataset_profile, chat_history)
+            res = self._handle_insight_request(message, schema_context, dataset_profile, chat_history)
         elif intent == 'chart':
-            return self._handle_chart_request(message, schema_context, dataset_profile, chat_history)
+            res = self._handle_chart_request(message, schema_context, dataset_profile, chat_history)
         elif intent == 'forecast':
-            return self._handle_forecast_request(message, schema_context, dataset_profile, chat_history)
+            res = self._handle_forecast_request(message, schema_context, dataset_profile, chat_history)
         else:
-            return self._handle_general_query(message, schema_context, chat_history)
+            res = self._handle_general_query(message, schema_context, chat_history, dataset_profile)
+
+        if isinstance(res, dict) and ('error' in res or (isinstance(res.get('content'), str) and res.get('content', '').startswith('Error:'))):
+            return self._generate_dynamic_fallback(message, dataset_profile, intent)
+
+        return res
 
     def _classify_intent(self, message: str, profile: Optional[Dict] = None) -> str:
         """Classify user message intent."""
@@ -366,3 +371,75 @@ Respond helpfully about the dataset and what analyses are possible."""
             'type': 'text',
             'content': text,
         }
+
+    def _generate_dynamic_fallback(self, message: str, profile: Optional[Dict], intent: str) -> Dict[str, Any]:
+        """Generate smart dynamic response directly from dataset schema when LLM API Key is missing or offline."""
+        if not profile:
+            return {
+                'type': 'text',
+                'content': 'I am ready to assist! Upload a dataset or select an existing one to perform natural language SQL queries, AI data insights, forecasting, and automated reporting.',
+                'follow_up_questions': ['How do I upload a dataset?', 'What file formats are supported?'],
+            }
+
+        cols = profile.get('column_names', [])
+        col_types = profile.get('column_types', {})
+        row_count = profile.get('row_count', 0)
+        col_count = profile.get('column_count', 0)
+
+        num_cols = [c for c, t in col_types.items() if t in ['integer', 'float']]
+        cat_cols = [c for c, t in col_types.items() if t in ['category', 'string']]
+        date_cols = [c for c, t in col_types.items() if t == 'datetime' or 'date' in c.lower() or 'time' in c.lower()]
+
+        target_num = num_cols[0] if num_cols else (cols[0] if cols else 'column')
+        target_cat = cat_cols[0] if cat_cols else (cols[1] if len(cols) > 1 else target_num)
+        target_date = date_cols[0] if date_cols else None
+
+        msg_lower = message.lower()
+
+        if intent == 'forecast' or any(k in msg_lower for k in ['forecast', 'predict', 'future', 'trend']):
+            return {
+                'type': 'forecast',
+                'content': f"Based on dataset schema ({row_count:,} rows), I recommend running time-series forecasting on numeric column '{target_num}' using date/time column '{target_date or target_cat}' over a 30-day horizon.",
+                'recommended_method': 'holt_winters',
+                'suggested_columns': {'target': target_num, 'date': target_date or target_cat},
+                'suggested_horizon': 30,
+                'follow_up_questions': [f"Forecast {target_num} for next 30 days", "Run anomaly detection"],
+            }
+        elif intent == 'chart' or any(k in msg_lower for k in ['chart', 'plot', 'graph', 'visualize']):
+            return {
+                'type': 'chart',
+                'content': f"Here is a recommended chart visualization comparing '{target_num}' grouped by '{target_cat}'.",
+                'chart_suggestion': {'type': 'bar', 'x': target_cat, 'y': target_num},
+                'follow_up_questions': [f"Show distribution of {target_num}", f"Compare {target_num} by {target_cat}"],
+            }
+        elif intent == 'insight' or any(k in msg_lower for k in ['insight', 'summary', 'analyze', 'overview']):
+            return {
+                'type': 'insight',
+                'content': f"Dataset Overview:\n- **Rows**: {row_count:,}\n- **Columns**: {col_count}\n- **Numeric Metrics**: {', '.join(num_cols[:5]) if num_cols else 'N/A'}\n- **Categorical Dimensions**: {', '.join(cat_cols[:5]) if cat_cols else 'N/A'}",
+                'key_findings': [
+                    f"Dataset contains {row_count:,} records across {col_count} attributes.",
+                    f"Primary numeric column identified: '{target_num}'.",
+                    f"Primary categorical dimension identified: '{target_cat}'.",
+                ],
+                'follow_up_questions': [f"What is the average {target_num}?", f"Show top 10 {target_cat} by {target_num}"],
+            }
+        else:
+            if 'count' in msg_lower or 'how many' in msg_lower:
+                sql = "SELECT COUNT(*) AS total_count FROM df"
+                explanation = f"Counting total records in dataset ({row_count:,} rows)."
+            elif 'top' in msg_lower or 'highest' in msg_lower or 'largest' in msg_lower or 'most' in msg_lower:
+                sql = f"SELECT `{target_cat}`, SUM(`{target_num}`) AS total_{target_num} FROM df GROUP BY `{target_cat}` ORDER BY total_{target_num} DESC LIMIT 10"
+                explanation = f"Querying top 10 '{target_cat}' by total '{target_num}'."
+            elif 'average' in msg_lower or 'mean' in msg_lower:
+                sql = f"SELECT AVG(`{target_num}`) AS avg_{target_num} FROM df"
+                explanation = f"Calculating average of '{target_num}'."
+            else:
+                sql = f"SELECT * FROM df LIMIT 10"
+                explanation = f"Displaying sample records from dataset."
+
+            return {
+                'type': 'sql',
+                'content': explanation,
+                'sql_query': sql,
+                'follow_up_questions': [f"Show top 10 {target_cat} by {target_num}", f"Calculate average {target_num}"],
+            }

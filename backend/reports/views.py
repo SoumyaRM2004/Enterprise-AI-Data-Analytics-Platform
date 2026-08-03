@@ -53,9 +53,20 @@ class ReportCreateView(APIView):
         )
 
         # Launch async generation
-        task = generate_report_task.delay(report.id)
-        report.celery_task_id = task.id
+        from django.conf import settings
+        import threading
+        import uuid
+
+        report.celery_task_id = str(uuid.uuid4())
         report.save()
+
+        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            thread = threading.Thread(target=generate_report_task, args=(report.id,), daemon=True)
+            thread.start()
+        else:
+            task = generate_report_task.delay(report.id)
+            report.celery_task_id = task.id
+            report.save()
 
         AuditLog.objects.create(
             user=request.user,

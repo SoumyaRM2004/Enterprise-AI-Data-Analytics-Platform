@@ -51,9 +51,20 @@ class ForecastCreateView(APIView):
         )
 
         # Launch async forecast
-        task = run_forecast_task.delay(forecast.id)
-        forecast.celery_task_id = task.id
+        from django.conf import settings
+        import threading
+        import uuid
+
+        forecast.celery_task_id = str(uuid.uuid4())
         forecast.save()
+
+        if getattr(settings, 'CELERY_TASK_ALWAYS_EAGER', False):
+            thread = threading.Thread(target=run_forecast_task, args=(forecast.id,), daemon=True)
+            thread.start()
+        else:
+            task = run_forecast_task.delay(forecast.id)
+            forecast.celery_task_id = task.id
+            forecast.save()
 
         AuditLog.objects.create(
             user=request.user,

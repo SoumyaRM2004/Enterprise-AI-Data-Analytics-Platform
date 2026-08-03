@@ -29,17 +29,23 @@ class ForecastEngine:
 
         # Prepare data
         if date_column and date_column in self.df.columns:
-            self.df[date_column] = pd.to_datetime(self.df[date_column])
-            self.df = self.df.sort_values(date_column)
-            time_series = self.df.set_index(date_column)[target_column]
+            try:
+                self.df[date_column] = pd.to_datetime(self.df[date_column], format='mixed', dayfirst=True, errors='coerce')
+                valid_df = self.df.dropna(subset=[date_column]).sort_values(date_column)
+                if len(valid_df) >= 5:
+                    time_series = valid_df.set_index(date_column)[target_column]
+                else:
+                    time_series = self.df[target_column]
+            except Exception:
+                time_series = self.df[target_column]
         else:
             time_series = self.df[target_column]
 
-        # Remove nulls
-        time_series = time_series.dropna()
+        # Convert target values to numeric safely
+        time_series = pd.to_numeric(time_series, errors='coerce').dropna()
 
-        if len(time_series) < 10:
-            raise ValueError("Not enough data points for forecasting. Need at least 10.")
+        if len(time_series) < 5:
+            raise ValueError("Not enough numeric data points for forecasting. Need at least 5 valid numbers.")
 
         if method == 'arima':
             return self._forecast_arima(time_series, horizon, parameters or {})
