@@ -32,7 +32,7 @@ class SQLExecutor:
             if keyword in sql_upper and keyword not in ['SELECT']:
                 raise ValueError(f"Forbidden SQL keyword: {keyword}")
 
-        # Register the DataFrame as a SQL context
+        sql = sql.replace('`', '"')
         from sqlglot import parse as sqlglot_parse
 
         try:

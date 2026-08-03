@@ -54,10 +54,11 @@ class ChatSendView(APIView):
     """Send a message in a chat session and get AI response."""
     permission_classes = [permissions.IsAuthenticated]
 
-    def post(self, request, session_id):
+    def post(self, request, pk=None, session_id=None):
+        target_id = pk or session_id
         try:
             session = ChatSession.objects.get(
-                id=session_id, owner=request.user, is_active=True
+                id=target_id, owner=request.user, is_active=True
             )
         except ChatSession.DoesNotExist:
             return Response({'error': 'Session not found.'}, status=status.HTTP_404_NOT_FOUND)
