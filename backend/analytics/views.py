@@ -37,7 +37,20 @@ class DashboardView(APIView):
 
         kpis = processor.get_kpis()
         correlations = processor.get_correlations()
-        profile = processor._create_profile()
+        profile_dict = dataset.data_profile if dataset.data_profile else processor._create_profile()
+        column_names = dataset.column_names if dataset.column_names else list(processor.df.columns)
+        column_types = dataset.column_types if dataset.column_types else processor._get_column_types()
+        sample_data = dataset.sample_data if dataset.sample_data else processor._get_sample_data()
+
+        full_profile = {
+            'row_count': dataset.row_count or int(len(processor.df)),
+            'column_count': dataset.column_count or int(len(processor.df.columns)),
+            'data_quality_score': dataset.data_quality_score if dataset.data_quality_score is not None else 100.0,
+            'data_profile': profile_dict,
+            'column_names': column_names,
+            'column_types': column_types,
+            'sample_data': sample_data,
+        }
 
         # Generate chart configurations
         chart_gen = ChartGenerator(processor.df)
@@ -49,10 +62,12 @@ class DashboardView(APIView):
                 'name': dataset.name,
                 'row_count': dataset.row_count,
                 'column_count': dataset.column_count,
+                'data_quality_score': dataset.data_quality_score,
+                'file_type': dataset.file_type,
             },
             'kpis': kpis,
             'correlations': correlations,
-            'profile': profile,
+            'profile': full_profile,
             'charts': charts,
             'widgets': DashboardWidgetSerializer(
                 DashboardWidget.objects.filter(dataset=dataset, owner=request.user),

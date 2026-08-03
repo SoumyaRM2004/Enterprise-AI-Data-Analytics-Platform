@@ -139,21 +139,21 @@ export default function DatasetDetailPage() {
       </div>
 
       {/* Tab Content */}
-      {activeTab === 'overview' && profile && (
+      {activeTab === 'overview' && (
         <div className="space-y-6">
           {/* KPI Cards */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="card">
               <p className="text-sm text-gray-500">Rows</p>
-              <p className="text-xl font-bold">{profile.row_count?.toLocaleString()}</p>
+              <p className="text-xl font-bold">{(profile?.row_count ?? dataset.row_count)?.toLocaleString() || '-'}</p>
             </div>
             <div className="card">
               <p className="text-sm text-gray-500">Columns</p>
-              <p className="text-xl font-bold">{profile.column_count}</p>
+              <p className="text-xl font-bold">{profile?.column_count ?? dataset.column_count ?? '-'}</p>
             </div>
             <div className="card">
               <p className="text-sm text-gray-500">Quality Score</p>
-              <p className="text-xl font-bold text-green-600">{profile.data_quality_score}%</p>
+              <p className="text-xl font-bold text-green-600">{profile?.data_quality_score ?? dataset.data_quality_score ?? 100}%</p>
             </div>
             <div className="card">
               <p className="text-sm text-gray-500">Data Type</p>
@@ -178,24 +178,26 @@ export default function DatasetDetailPage() {
         </div>
       )}
 
-      {activeTab === 'profile' && profile && (
+      {activeTab === 'profile' && (
         <div className="space-y-4">
-          {Object.entries(profile.data_profile).map(([colName, colInfo]: [string, any]) => (
+          {Object.entries(profile?.data_profile || (profile && !profile.data_profile ? profile : {})).map(([colName, colInfo]: [string, any]) => (
             <div key={colName} className="card">
               <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                 {colName}
-                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{colInfo.dtype}</span>
+                {colInfo?.dtype && <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded">{colInfo.dtype}</span>}
               </h3>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3">
-                <div><p className="text-xs text-gray-500">Null Count</p><p className="font-medium">{colInfo.null_count}</p></div>
-                <div><p className="text-xs text-gray-500">Null %</p><p className="font-medium">{colInfo.null_percent}%</p></div>
-                <div><p className="text-xs text-gray-500">Unique</p><p className="font-medium">{colInfo.unique_count}</p></div>
-                {colInfo.mean && <div><p className="text-xs text-gray-500">Mean</p><p className="font-medium">{colInfo.mean}</p></div>}
-                {colInfo.std && <div><p className="text-xs text-gray-500">Std Dev</p><p className="font-medium">{colInfo.std}</p></div>}
-                {colInfo.min !== undefined && <div><p className="text-xs text-gray-500">Min</p><p className="font-medium">{colInfo.min}</p></div>}
-                {colInfo.max !== undefined && <div><p className="text-xs text-gray-500">Max</p><p className="font-medium">{colInfo.max}</p></div>}
-                {colInfo.skewness && <div><p className="text-xs text-gray-500">Skewness</p><p className="font-medium">{colInfo.skewness}</p></div>}
-              </div>
+              {colInfo && typeof colInfo === 'object' && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3">
+                  <div><p className="text-xs text-gray-500">Null Count</p><p className="font-medium">{colInfo.null_count ?? '-'}</p></div>
+                  <div><p className="text-xs text-gray-500">Null %</p><p className="font-medium">{colInfo.null_percent ?? 0}%</p></div>
+                  <div><p className="text-xs text-gray-500">Unique</p><p className="font-medium">{colInfo.unique_count ?? '-'}</p></div>
+                  {colInfo.mean !== undefined && colInfo.mean !== null && <div><p className="text-xs text-gray-500">Mean</p><p className="font-medium">{colInfo.mean}</p></div>}
+                  {colInfo.std !== undefined && colInfo.std !== null && <div><p className="text-xs text-gray-500">Std Dev</p><p className="font-medium">{colInfo.std}</p></div>}
+                  {colInfo.min !== undefined && colInfo.min !== null && <div><p className="text-xs text-gray-500">Min</p><p className="font-medium">{colInfo.min}</p></div>}
+                  {colInfo.max !== undefined && colInfo.max !== null && <div><p className="text-xs text-gray-500">Max</p><p className="font-medium">{colInfo.max}</p></div>}
+                  {colInfo.skewness !== undefined && colInfo.skewness !== null && <div><p className="text-xs text-gray-500">Skewness</p><p className="font-medium">{colInfo.skewness}</p></div>}
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -218,28 +220,35 @@ export default function DatasetDetailPage() {
         </div>
       )}
 
-      {activeTab === 'data' && profile && (
+      {activeTab === 'data' && (
         <div className="card overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-gray-200">
-                {profile.column_names.map((col) => (
-                  <th key={col} className="px-4 py-3 text-left font-medium text-gray-700">{col}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {profile.sample_data.slice(0, 20).map((row, idx) => (
-                <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
-                  {profile.column_names.map((col) => (
-                    <td key={col} className="px-4 py-3 text-gray-600">
-                      {row[col] !== null && row[col] !== undefined ? String(row[col]) : '-'}
-                    </td>
+          {(() => {
+            const cols = profile?.column_names || dataset?.column_names || [];
+            const rows = profile?.sample_data || dataset?.sample_data || [];
+            if (cols.length === 0) return <p className="text-gray-500 py-4 text-center">No preview data available.</p>;
+            return (
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-200">
+                    {cols.map((col) => (
+                      <th key={col} className="px-4 py-3 text-left font-medium text-gray-700">{col}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.slice(0, 20).map((row, idx) => (
+                    <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
+                      {cols.map((col) => (
+                        <td key={col} className="px-4 py-3 text-gray-600">
+                          {row[col] !== null && row[col] !== undefined ? String(row[col]) : '-'}
+                        </td>
+                      ))}
+                    </tr>
                   ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                </tbody>
+              </table>
+            );
+          })()}
         </div>
       )}
     </div>
