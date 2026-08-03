@@ -27,6 +27,7 @@ class ForecastCreateSerializer(serializers.ModelSerializer):
 
 class AnomalyDetectionSerializer(serializers.ModelSerializer):
     owner_username = serializers.CharField(source='owner.username', read_only=True)
+    dataset_name = serializers.CharField(source='dataset.name', read_only=True)
 
     class Meta:
         model = AnomalyDetection

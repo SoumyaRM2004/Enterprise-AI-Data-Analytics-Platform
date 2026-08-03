@@ -16,9 +16,14 @@ interface ForecastModel {
 
 interface AnomalyResult {
   id: number;
-  name: string;
-  anomalies_count: number;
-  target_column: string;
+  dataset_name?: string;
+  method?: string;
+  column?: string;
+  target_column?: string;
+  anomaly_count?: number;
+  anomalies_count?: number;
+  total_records?: number;
+  status?: string;
   created_at: string;
 }
 
@@ -316,19 +321,35 @@ export default function ForecastingPage() {
         <div className="card">
           <h2 className="text-lg font-semibold text-gray-900 mb-4">Anomaly Detection Results</h2>
           <div className="space-y-3">
-            {anomalies.map((a) => (
-              <div key={a.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-3">
-                  <AlertTriangle className="w-5 h-5 text-amber-500" />
-                  <div>
-                    <p className="font-medium text-gray-900">{a.name}</p>
-                    <p className="text-sm text-gray-500">
-                      {a.target_column} • {a.anomalies_count} anomalies detected
-                    </p>
+            {anomalies.map((a) => {
+              const col = a.column || a.target_column || 'Column';
+              const count = a.anomaly_count ?? a.anomalies_count ?? 0;
+              const dsName = a.dataset_name || 'Dataset';
+              const pct = a.total_records && count ? ((count / a.total_records) * 100).toFixed(1) : null;
+              const methodLabel = (a.method || 'isolation_forest').replace('_', ' ').toUpperCase();
+              return (
+                <div key={a.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <AlertTriangle className="w-5 h-5 text-amber-500 flex-shrink-0" />
+                    <div>
+                      <p className="font-medium text-gray-900">
+                        {methodLabel} — Target Column: <span className="text-primary-600 font-semibold">{col}</span>
+                      </p>
+                      <p className="text-sm text-gray-500">
+                        {dsName} • <span className="font-semibold text-amber-600">{count.toLocaleString()}</span> anomalies detected {pct ? `(${pct}% of ${a.total_records?.toLocaleString()} rows)` : ''}
+                      </p>
+                    </div>
                   </div>
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-medium ${
+                    a.status === 'completed' ? 'bg-green-100 text-green-700' :
+                    a.status === 'running' ? 'bg-yellow-100 text-yellow-700' :
+                    'bg-green-100 text-green-700'
+                  }`}>
+                    {a.status || 'completed'}
+                  </span>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
