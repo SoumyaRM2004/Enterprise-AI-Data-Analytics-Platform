@@ -161,6 +161,11 @@ CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'UTC'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
 
+# Enable synchronous task execution in local development when Redis is not running
+CELERY_TASK_ALWAYS_EAGER = env.bool('CELERY_TASK_ALWAYS_EAGER', default=DEBUG)
+CELERY_TASK_EAGER_PROPAGATES = True
+
+
 # LLM Configuration
 LLM_PROVIDER = env('LLM_PROVIDER', default='openai_compatible')
 OPENAI_API_BASE = env('OPENAI_API_BASE', default='')
