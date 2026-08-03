@@ -35,13 +35,11 @@ class ChatSessionListView(generics.ListCreateAPIView):
             owner=self.request.user, is_active=True
         )
 
-    def get_serializer_class(self):
-        if self.request.method == 'POST':
-            return ChatSessionCreateSerializer
-        return ChatSessionSerializer
-
-    def perform_create(self, serializer):
-        serializer.save(owner=self.request.user)
+    def create(self, request, *args, **kwargs):
+        serializer = ChatSessionCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        session = serializer.save(owner=request.user)
+        return Response(ChatSessionSerializer(session).data, status=status.HTTP_201_CREATED)
 
 
 class ChatSessionDetailView(generics.RetrieveDestroyAPIView):
