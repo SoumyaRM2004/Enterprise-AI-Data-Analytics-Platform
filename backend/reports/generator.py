@@ -146,8 +146,9 @@ class PDFReportGenerator:
         elements.append(Paragraph("Data Profile", self.styles['SectionHeader']))
         elements.append(Spacer(1, 0.2 * inch))
 
-        if profile.get('data_profile'):
-            for col_name, col_info in list(profile['data_profile'].items())[:20]:
+        profile_items = profile.get('data_profile') if isinstance(profile, dict) and 'data_profile' in profile else profile
+        if isinstance(profile_items, dict):
+            for col_name, col_info in list(profile_items.items())[:20]:
                 if isinstance(col_info, dict):
                     elements.append(Paragraph(f"<b>{col_name}</b> ({col_info.get('dtype', 'unknown')})", self.styles['SubSectionHeader']))
                     details = [

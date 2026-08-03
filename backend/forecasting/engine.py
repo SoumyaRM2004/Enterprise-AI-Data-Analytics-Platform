@@ -30,19 +30,21 @@ class ForecastEngine:
         # Prepare data
         if date_column and date_column in self.df.columns:
             try:
-                self.df[date_column] = pd.to_datetime(self.df[date_column], format='mixed', dayfirst=True, errors='coerce')
-                valid_df = self.df.dropna(subset=[date_column]).sort_values(date_column)
-                if len(valid_df) >= 5:
-                    time_series = valid_df.set_index(date_column)[target_column]
-                else:
-                    time_series = self.df[target_column]
-            except Exception:
-                time_series = self.df[target_column]
-        else:
-            time_series = self.df[target_column]
+                temp_df = self.df[[date_column, target_column]].copy()
+                temp_df[date_column] = pd.to_datetime(temp_df[date_column], format='mixed', dayfirst=True, errors='coerce')
+                temp_df[target_column] = pd.to_numeric(temp_df[target_column], errors='coerce')
+                temp_df = temp_df.dropna(subset=[date_column, target_column])
 
-        # Convert target values to numeric safely
-        time_series = pd.to_numeric(time_series, errors='coerce').dropna()
+                # Aggregate duplicate timestamps into a clean daily time series
+                daily_ts = temp_df.groupby(pd.Grouper(key=date_column, freq='D'))[target_column].mean().dropna()
+                if len(daily_ts) >= 5:
+                    time_series = daily_ts
+                else:
+                    time_series = pd.to_numeric(self.df[target_column], errors='coerce').dropna()
+            except Exception:
+                time_series = pd.to_numeric(self.df[target_column], errors='coerce').dropna()
+        else:
+            time_series = pd.to_numeric(self.df[target_column], errors='coerce').dropna()
 
         if len(time_series) < 5:
             raise ValueError("Not enough numeric data points for forecasting. Need at least 5 valid numbers.")

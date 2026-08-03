@@ -118,7 +118,7 @@ Be helpful, concise, and accurate. Use the dataset schema to inform your answers
             return 'sql'  # Default to SQL for data questions
 
     def _handle_nl_to_sql(
-        self, message: str, schema_context: str, chat_history: List[Dict]
+        self, message: str, schema_context: str, chat_history: List[Dict], dataset_profile: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """Handle natural language to SQL conversion."""
         prompt = f"""{self.SYSTEM_PROMPT}
@@ -264,7 +264,7 @@ Respond with JSON:
         }
 
     def _handle_general_query(
-        self, message: str, schema_context: str, chat_history: List[Dict]
+        self, message: str, schema_context: str, chat_history: List[Dict], dataset_profile: Optional[Dict] = None
     ) -> Dict[str, Any]:
         """Handle general queries."""
         prompt = f"""{self.SYSTEM_PROMPT}
