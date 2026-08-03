@@ -96,7 +96,10 @@ export default function ForecastingPage() {
     e.preventDefault();
     if (!anomalyDataset) return;
     try {
-      await forecastingAPI.createAnomalyDetection(anomalyDataset, anomalyForm);
+      await forecastingAPI.createAnomalyDetection(anomalyDataset, {
+        ...anomalyForm,
+        column: anomalyForm.target_column,
+      });
       toast.success('Anomaly detection started!');
       loadAnomalies();
     } catch {

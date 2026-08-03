@@ -104,7 +104,7 @@ class AnomalyDetectionCreateView(APIView):
             return Response({'error': 'Dataset not found.'}, status=status.HTTP_404_NOT_FOUND)
 
         method = request.data.get('method', 'isolation_forest')
-        column = request.data.get('column')
+        column = request.data.get('column') or request.data.get('target_column')
         parameters = request.data.get('parameters', {})
 
         if not column:

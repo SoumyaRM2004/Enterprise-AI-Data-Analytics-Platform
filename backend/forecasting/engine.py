@@ -229,7 +229,9 @@ class ForecastEngine:
         if column not in self.df.columns:
             raise ValueError(f"Column '{column}' not found.")
 
-        data = self.df[column].dropna()
+        data = pd.to_numeric(self.df[column], errors='coerce').dropna()
+        if len(data) < 5:
+            raise ValueError(f"Column '{column}' does not contain enough numeric values for anomaly detection.")
 
         if method == 'isolation_forest':
             return self._detect_isolation_forest(data, column, parameters or {})
