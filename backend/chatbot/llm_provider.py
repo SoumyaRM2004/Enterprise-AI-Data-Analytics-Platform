@@ -229,21 +229,34 @@ class LLMProviderFactory:
     @classmethod
     def create(cls, provider_name: Optional[str] = None) -> LLMProvider:
         """Create an LLM provider instance based on settings."""
-        provider_name = provider_name or getattr(settings, 'LLM_PROVIDER', 'openai_compatible')
+        groq_key = getattr(settings, 'GROQ_API_KEY', '') or os.environ.get('GROQ_API_KEY', '')
+        gemini_key = getattr(settings, 'GEMINI_API_KEY', '') or os.environ.get('GEMINI_API_KEY', '')
+        openai_key = getattr(settings, 'OPENAI_API_KEY', '') or os.environ.get('OPENAI_API_KEY', '')
+
+        # Auto-detect active provider if valid API key is present
+        if not provider_name or provider_name == 'openai_compatible':
+            if groq_key and not groq_key.startswith('gsk_your_'):
+                provider_name = 'groq'
+            elif gemini_key and not gemini_key.startswith('your-'):
+                provider_name = 'gemini'
+            elif openai_key and not openai_key.startswith('your-'):
+                provider_name = 'openai'
+            else:
+                provider_name = getattr(settings, 'LLM_PROVIDER', 'openai_compatible')
 
         if provider_name == 'openai':
             return OpenAIProvider(
-                api_key=getattr(settings, 'OPENAI_API_KEY', ''),
+                api_key=openai_key,
                 model=getattr(settings, 'LLM_MODEL_NAME', 'gpt-4o-mini'),
             )
         elif provider_name == 'gemini':
             return GeminiProvider(
-                api_key=getattr(settings, 'GEMINI_API_KEY', ''),
+                api_key=gemini_key,
                 model=getattr(settings, 'LLM_MODEL_NAME', 'gemini-2.0-flash') or 'gemini-2.0-flash',
             )
         elif provider_name == 'groq':
             return GroqProvider(
-                api_key=getattr(settings, 'GROQ_API_KEY', ''),
+                api_key=groq_key,
                 model=getattr(settings, 'LLM_MODEL_NAME', 'llama-3.3-70b-versatile') or 'llama-3.3-70b-versatile',
             )
         elif provider_name == 'ollama':
