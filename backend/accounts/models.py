@@ -61,7 +61,7 @@ class AuditLog(models.Model):
     action = models.CharField(max_length=50, choices=ActionType.choices)
     description = models.TextField(blank=True)
     resource_type = models.CharField(max_length=50, blank=True)
-    resource_id = models.IntegerField(null=True, blank=True)
+    resource_id = models.CharField(max_length=255, null=True, blank=True)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
     user_agent = models.TextField(blank=True)
     metadata = models.JSONField(default=dict, blank=True)
