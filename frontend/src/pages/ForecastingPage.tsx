@@ -132,10 +132,10 @@ export default function ForecastingPage() {
     }
   };
 
-  const getColumnsForDataset = (datasetId: string) => {
+  const getColumnsForDataset = (datasetId: string): string[] => {
     if (!datasetId) return [];
     const ds = datasets.find((d) => String(d.id) === String(datasetId));
-    return ds?.column_names || [];
+    return (ds?.column_names as string[]) || [];
   };
 
   return (

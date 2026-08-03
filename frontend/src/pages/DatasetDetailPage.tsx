@@ -2,7 +2,6 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { datasetsAPI, analyticsAPI } from '../services/api';
 import {
-  BarChart, LineChart, PieChart, ScatterChart,
   Chart as ChartJS, CategoryScale, LinearScale, BarElement,
   PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler,
 } from 'chart.js';
@@ -230,15 +229,15 @@ export default function DatasetDetailPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-200">
-                    {cols.map((col) => (
+                    {cols.map((col: string) => (
                       <th key={col} className="px-4 py-3 text-left font-medium text-gray-700">{col}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.slice(0, 20).map((row, idx) => (
+                  {rows.slice(0, 20).map((row: any, idx: number) => (
                     <tr key={idx} className="border-b border-gray-100 hover:bg-gray-50">
-                      {cols.map((col) => (
+                      {cols.map((col: string) => (
                         <td key={col} className="px-4 py-3 text-gray-600">
                           {row[col] !== null && row[col] !== undefined ? String(row[col]) : '-'}
                         </td>
