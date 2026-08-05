@@ -136,7 +136,7 @@ class ChatSendView(APIView):
 
                 assistant_msg.query_result = result
                 assistant_msg.message_type = ChatMessage.MessageType.TABLE
-                assistant_msg.content = f"{nl_explanation}\n\n**Executed Query:** `{response['sql_query']}`"
+                assistant_msg.content = nl_explanation
                 assistant_msg.save()
 
                 AuditLog.objects.create(
@@ -147,7 +147,7 @@ class ChatSendView(APIView):
                     resource_id=str(dataset.id),
                 )
             except Exception as e:
-                assistant_msg.content = f"SQL generated but execution failed: {str(e)}\n\nOriginal SQL: {response.get('sql_query', '')}"
+                assistant_msg.content = f"Execution failed: {str(e)}"
                 assistant_msg.sql_query = response.get('sql_query', '')
                 assistant_msg.save()
 

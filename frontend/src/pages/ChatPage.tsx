@@ -1,7 +1,18 @@
 import { useEffect, useState, useRef } from 'react';
 import { chatbotAPI, datasetsAPI } from '../services/api';
-import { Send, Plus, MessageSquare, Database, BarChart3, Brain, Table, Trash2 } from 'lucide-react';
+import {
+  Send, Plus, MessageSquare, Database, BarChart3, Brain, Table as TableIcon,
+  Trash2, Code, ChevronDown, Sparkles
+} from 'lucide-react';
 import toast from 'react-hot-toast';
+import {
+  Chart as ChartJS, CategoryScale, LinearScale, BarElement,
+  PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler,
+} from 'chart.js';
+import { Bar, Line, Pie } from 'react-chartjs-2';
+
+// Register Chart.js components
+ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, ArcElement, Title, Tooltip, Legend, Filler);
 
 interface Message {
   id?: number;
@@ -30,6 +41,7 @@ export default function ChatPage() {
   const [isSending, setIsSending] = useState(false);
   const [datasets, setDatasets] = useState<any[]>([]);
   const [selectedDataset, setSelectedDataset] = useState<string | null>(null);
+  const [expandedSql, setExpandedSql] = useState<Record<number, boolean>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -140,6 +152,111 @@ export default function ChatPage() {
     }
   };
 
+  const toggleSql = (idx: number) => {
+    setExpandedSql((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  };
+
+  const parseCleanContent = (rawContent: string): string => {
+    if (!rawContent) return '';
+    let content = rawContent.trim();
+    if (content.startsWith('{') && content.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(content);
+        content = parsed.content || parsed.summary || parsed.message || '';
+      } catch {}
+    }
+    return content.replace(/\*\*Executed Query:\*\*[\s\S]*/i, '').trim();
+  };
+
+  const getOrderedColumns = (cols: string[]): string[] => {
+    if (!cols) return [];
+    const stockIndex = cols.findIndex((c) =>
+      ['stockcode', 'productid', 'itemid', 'sku'].some((term) => c.toLowerCase().includes(term))
+    );
+    const descIndex = cols.findIndex((c) =>
+      ['description', 'productname', 'name', 'itemname', 'title'].some((term) => c.toLowerCase().includes(term))
+    );
+
+    if (stockIndex !== -1 && descIndex !== -1 && Math.abs(stockIndex - descIndex) > 1) {
+      const reordered = [...cols];
+      const descCol = reordered.splice(descIndex, 1)[0];
+      const newStockIndex = reordered.findIndex((c) =>
+        ['stockcode', 'productid', 'itemid', 'sku'].some((term) => c.toLowerCase().includes(term))
+      );
+      reordered.splice(newStockIndex + 1, 0, descCol);
+      return reordered;
+    }
+    return cols;
+  };
+
+  const renderInteractiveChart = (msg: Message) => {
+    const data = msg.query_result?.data;
+    if (!data || !data.rows || data.rows.length === 0 || !data.columns) return null;
+
+    const cols = data.columns;
+    const config = msg.chart_config || {};
+
+    let xCol = config.x && cols.includes(config.x) ? config.x : cols.find((c: string) => typeof data.rows[0][c] === 'string');
+    if (!xCol) xCol = cols[0];
+
+    let yCol = config.y && cols.includes(config.y) ? config.y : cols.find((c: string) => c !== xCol && typeof data.rows[0][c] === 'number');
+    if (!yCol) yCol = cols.find((c: string) => c !== xCol);
+
+    if (!xCol || !yCol || xCol === yCol) return null;
+
+    const labels = data.rows.slice(0, 15).map((r: any) => String(r[xCol] ?? ''));
+    const values = data.rows.slice(0, 15).map((r: any) => Number(r[yCol]) || 0);
+
+    const chartData = {
+      labels,
+      datasets: [
+        {
+          label: yCol,
+          data: values,
+          backgroundColor: 'rgba(59, 130, 246, 0.65)',
+          borderColor: 'rgb(37, 99, 235)',
+          borderWidth: 1.5,
+          borderRadius: 4,
+        },
+      ],
+    };
+
+    const chartOptions = {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: { enabled: true },
+      },
+      scales: {
+        x: { ticks: { font: { size: 10 }, maxRotation: 45 } },
+        y: { ticks: { font: { size: 10 } } },
+      },
+    };
+
+    const chartType = (config.type || 'bar').toLowerCase();
+
+    return (
+      <div className="mt-4 p-4 bg-gray-50/80 border border-gray-200 rounded-xl">
+        <div className="flex items-center gap-2 mb-3">
+          <BarChart3 size={15} className="text-primary-600" />
+          <span className="text-xs font-semibold text-gray-700 uppercase tracking-wider">
+            Visualization: {yCol} by {xCol}
+          </span>
+        </div>
+        <div className="h-52 w-full">
+          {chartType === 'line' ? (
+            <Line data={chartData} options={chartOptions} />
+          ) : chartType === 'pie' ? (
+            <Pie data={chartData} options={chartOptions} />
+          ) : (
+            <Bar data={chartData} options={chartOptions} />
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-[calc(100vh-6rem)] gap-6">
       {/* Sidebar - Sessions */}
@@ -203,21 +320,21 @@ export default function ChatPage() {
       {/* Chat Area */}
       <div className="flex-1 bg-white rounded-xl border border-gray-200 flex flex-col">
         {/* Messages view */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 overflow-y-auto p-6 space-y-6">
           {!currentSession && messages.length === 0 ? (
             <div className="h-full flex items-center justify-center">
               <div className="text-center py-12">
-                <Brain className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+                <Brain className="w-16 h-16 text-primary-500 mx-auto mb-4 animate-pulse" />
                 <h2 className="text-xl font-semibold text-gray-900 mb-2">AI Analytics Assistant</h2>
-                <p className="text-gray-500 max-w-md mx-auto">
-                  Ask questions about your data, generate SQL queries, create visualizations, and get AI-powered insights.
+                <p className="text-gray-500 max-w-md mx-auto text-sm">
+                  Ask natural language questions about your data, generate SQL queries, create visualizations, and uncover AI insights.
                 </p>
                 <div className="mt-6 flex flex-wrap gap-2 justify-center">
-                  {['Show monthly sales trends', 'Find top products', 'Detect anomalies', 'Predict next quarter'].map((q) => (
+                  {['Show monthly sales trends', 'Find top 10 customers', 'Detect anomalies', 'Predict next quarter revenue'].map((q) => (
                     <button
                       key={q}
                       onClick={() => sendMessage(q)}
-                      className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-full text-sm text-gray-700 transition-colors"
+                      className="px-3.5 py-1.5 bg-gray-100 hover:bg-primary-50 hover:text-primary-700 hover:border-primary-200 border border-transparent rounded-full text-xs font-medium text-gray-700 transition-colors"
                     >
                       {q}
                     </button>
@@ -227,88 +344,144 @@ export default function ChatPage() {
             </div>
           ) : (
             <>
-              {messages.map((msg, idx) => (
-                <div
-                  key={idx}
-                  className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div className={`max-w-[80%] rounded-2xl px-4 py-3 ${
-                    msg.role === 'user'
-                      ? 'bg-primary-600 text-white'
-                      : 'bg-gray-100 text-gray-900'
-                  }`}>
-                    {/* Text content */}
-                    <p className="whitespace-pre-wrap text-sm">{msg.content}</p>
+              {messages.map((msg, idx) => {
+                const isUser = msg.role === 'user';
+                const cleanContent = parseCleanContent(msg.content);
+                const hasQueryResults = msg.query_result?.data?.rows?.length > 0;
+                const orderedColumns = getOrderedColumns(msg.query_result?.data?.columns || []);
 
-                    {/* SQL Query */}
-                    {msg.sql_query && (
-                      <div className="mt-3 p-3 bg-gray-800 rounded-lg">
-                        <p className="text-xs text-green-400 mb-1">SQL Query:</p>
-                        <pre className="text-sm text-green-300 font-mono overflow-x-auto">{msg.sql_query}</pre>
-                      </div>
-                    )}
+                return (
+                  <div
+                    key={idx}
+                    className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+                  >
+                    <div
+                      className={`max-w-[85%] rounded-2xl ${
+                        isUser
+                          ? 'bg-primary-600 text-white px-4 py-3'
+                          : 'bg-white border border-gray-200 shadow-sm text-gray-900 p-5'
+                      }`}
+                    >
+                      {/* User message */}
+                      {isUser ? (
+                        <p className="whitespace-pre-wrap text-sm">{cleanContent}</p>
+                      ) : (
+                        /* Assistant BI Card layout */
+                        <div className="space-y-4">
+                          {/* 1. Natural Language Summary */}
+                          {cleanContent && (
+                            <div className="flex gap-2 items-start">
+                              <Sparkles size={16} className="text-primary-600 shrink-0 mt-0.5" />
+                              <p className="text-sm font-normal text-gray-800 leading-relaxed whitespace-pre-wrap">
+                                {cleanContent}
+                              </p>
+                            </div>
+                          )}
 
-                    {/* Query Results Table */}
-                    {msg.query_result?.data?.rows && (
-                      <div className="mt-3">
-                        <p className="text-xs text-gray-500 mb-1">
-                          Results: {msg.query_result.data.row_count} rows
-                        </p>
-                        <div className="overflow-x-auto max-h-64">
-                          <table className="text-xs w-full">
-                            <thead>
-                              <tr className="border-b border-gray-200">
-                                {msg.query_result.data.columns?.map((col: string) => (
-                                  <th key={col} className="px-2 py-1 text-left font-medium">{col}</th>
+                          {/* 2. Key Findings */}
+                          {msg.metadata?.key_findings?.length > 0 && (
+                            <div className="p-3 bg-gray-50 border border-gray-200 rounded-lg">
+                              <p className="text-xs font-semibold text-gray-700 uppercase tracking-wider mb-1.5">Key Findings</p>
+                              <ul className="space-y-1">
+                                {msg.metadata.key_findings.map((f: string, fIdx: number) => (
+                                  <li key={fIdx} className="text-xs text-gray-600 flex items-start gap-1.5">
+                                    <span className="text-primary-500 font-bold">•</span>
+                                    <span>{f}</span>
+                                  </li>
                                 ))}
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {msg.query_result.data.rows.slice(0, 50).map((row: any, i: number) => (
-                                <tr key={i} className="border-b border-gray-100">
-                                  {msg.query_result.data.columns?.map((col: string) => (
-                                    <td key={col} className="px-2 py-1">{row[col] ?? '-'}</td>
-                                  ))}
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
+                              </ul>
+                            </div>
+                          )}
+
+                          {/* 3. Interactive Chart Visualization */}
+                          {renderInteractiveChart(msg)}
+
+                          {/* 4. Query Results Data Table */}
+                          {hasQueryResults && (
+                            <div className="mt-4 border border-gray-200 rounded-xl overflow-hidden">
+                              <div className="bg-gray-50 px-3.5 py-2.5 border-b border-gray-200 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <TableIcon size={14} className="text-gray-500" />
+                                  <span className="text-xs font-semibold text-gray-700">Query Results</span>
+                                </div>
+                                <span className="text-xs font-medium text-gray-500 bg-gray-200/70 px-2 py-0.5 rounded-full">
+                                  {msg.query_result.data.row_count} rows
+                                </span>
+                              </div>
+                              <div className="overflow-x-auto max-h-64">
+                                <table className="text-xs w-full text-left">
+                                  <thead>
+                                    <tr className="bg-gray-100/70 border-b border-gray-200 text-gray-600">
+                                      {orderedColumns.map((col: string) => (
+                                        <th key={col} className="px-3.5 py-2 font-semibold whitespace-nowrap">{col}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-gray-100">
+                                    {msg.query_result.data.rows.slice(0, 50).map((row: any, i: number) => (
+                                      <tr key={i} className="hover:bg-gray-50/80 transition-colors">
+                                        {orderedColumns.map((col: string) => (
+                                          <td key={col} className="px-3.5 py-2 text-gray-700 whitespace-nowrap">
+                                            {row[col] !== null && row[col] !== undefined ? String(row[col]) : '-'}
+                                          </td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* 5. Collapsible "Show SQL" Section */}
+                          {msg.sql_query && (
+                            <div className="pt-1">
+                              <button
+                                onClick={() => toggleSql(idx)}
+                                className="inline-flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 bg-gray-100 hover:bg-gray-200 px-2.5 py-1.5 rounded-lg transition-colors"
+                              >
+                                <Code size={13} />
+                                <span>{expandedSql[idx] ? 'Hide SQL' : 'Show SQL'}</span>
+                                <ChevronDown size={13} className={`transition-transform duration-200 ${expandedSql[idx] ? 'rotate-180' : ''}`} />
+                              </button>
+                              {expandedSql[idx] && (
+                                <div className="mt-2.5 p-3.5 bg-slate-900 rounded-xl shadow-inner border border-slate-800">
+                                  <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1.5">Executed SQL Query</p>
+                                  <pre className="text-xs text-emerald-400 font-mono overflow-x-auto whitespace-pre leading-relaxed">{msg.sql_query}</pre>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* 6. Follow-up Suggestions */}
+                          {msg.metadata?.follow_up_questions?.length > 0 && (
+                            <div className="pt-2 border-t border-gray-100">
+                              <p className="text-xs font-medium text-gray-400 mb-2">Suggested Follow-ups:</p>
+                              <div className="flex flex-wrap gap-2">
+                                {msg.metadata.follow_up_questions.map((q: string, qIdx: number) => (
+                                  <button
+                                    key={qIdx}
+                                    onClick={() => sendMessage(q)}
+                                    className="text-xs bg-primary-50/80 hover:bg-primary-100 text-primary-700 border border-primary-200/50 px-3 py-1.5 rounded-full transition-colors font-medium text-left"
+                                  >
+                                    {q}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    )}
-
-                    {/* Chart suggestion */}
-                    {msg.chart_config?.type && (
-                      <div className="mt-3 flex items-center gap-2 p-2 bg-blue-50 rounded-lg">
-                        <BarChart3 size={16} className="text-blue-600" />
-                        <span className="text-sm text-blue-700">
-                          Suggested: {msg.chart_config.type} chart
-                          {msg.chart_config.x && ` (${msg.chart_config.x} vs ${msg.chart_config.y})`}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Key findings */}
-                    {msg.metadata?.key_findings?.length > 0 && (
-                      <div className="mt-3">
-                        <p className="text-xs font-medium text-gray-500 mb-1">Key Findings:</p>
-                        <ul className="list-disc list-inside text-sm">
-                          {msg.metadata.key_findings.map((f: string, i: number) => (
-                            <li key={i} className="text-gray-600">{f}</li>
-                          ))}
-                        </ul>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
               {isSending && (
                 <div className="flex justify-start">
-                  <div className="bg-gray-100 rounded-2xl px-4 py-3">
-                    <div className="flex gap-1">
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                      <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+                  <div className="bg-white border border-gray-200 shadow-sm rounded-2xl px-5 py-4">
+                    <div className="flex items-center gap-2">
+                      <Sparkles size={16} className="text-primary-600 animate-spin" />
+                      <span className="text-xs font-medium text-gray-500">Analyzing data and generating insights...</span>
                     </div>
                   </div>
                 </div>
@@ -326,8 +499,8 @@ export default function ChatPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-              placeholder="Ask about your data..."
-              className="input-field flex-1"
+              placeholder="Ask a question about your data..."
+              className="input-field flex-1 text-sm"
               disabled={isSending}
             />
             <button
