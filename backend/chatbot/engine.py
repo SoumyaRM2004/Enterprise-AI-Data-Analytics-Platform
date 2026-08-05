@@ -92,7 +92,9 @@ Your response MUST be a single valid JSON object:
         # Classify intent
         intent = self._classify_intent(message, dataset_profile)
 
-        if intent == 'sql':
+        if intent == 'generic_trend':
+            res = self._handle_generic_trend_request(message, schema_context, dataset_profile)
+        elif intent == 'sql':
             res = self._handle_nl_to_sql_with_repair(
                 message, schema_context, chat_history, dataset_profile, conv_state
             )
@@ -117,7 +119,19 @@ Your response MUST be a single valid JSON object:
 
     def _classify_intent(self, message: str, profile: Optional[Dict] = None) -> str:
         """Classify user message intent into sql, forecast, chart, insight, or general."""
-        msg = message.lower()
+        msg = message.lower().strip()
+
+        # Check for generic trend requests (e.g. "show trends", "analyze trend", etc.)
+        generic_trend_patterns = [
+            r'^\s*show\s+trends?\s*$',
+            r'^\s*analyze\s+trends?\s*$',
+            r'^\s*show\s+trend\s*$',
+            r'^\s*trend\s+analysis\s*$',
+            r'^\s*trends?\s*$',
+            r'^\s*analyze\s+trend\s*$',
+        ]
+        if any(re.match(pattern, msg) for pattern in generic_trend_patterns):
+            return 'generic_trend'
 
         # Explicit future prediction words (excluding 'trend' which defaults to historical SQL)
         forecast_words = ['predict', 'forecast', 'future', 'next month', 'next quarter', 'next year', 'projection', 'estimate']
@@ -572,6 +586,84 @@ Write a concise 2-3 sentence business summary explaining the forecast trend, exp
             logger.error(f"Error in explain_forecast_results: {e}")
 
         return f"{target_metric} is forecast to change by {growth_pct:+.1f}% over the projected horizon."
+
+    def _handle_generic_trend_request(
+        self, message: str, schema_context: str, profile: Optional[Dict]
+    ) -> Dict[str, Any]:
+        """Handle generic trend requests with interactive clarification options."""
+        options = self._infer_trend_options(profile)
+
+        return {
+            'type': 'clarification',
+            'content': '📈 What trend would you like to analyze?',
+            'options': options,
+            'follow_up_questions': options,
+            'confidence': 1.0,
+        }
+
+    def _infer_trend_options(self, profile: Optional[Dict]) -> List[str]:
+        """Infer business-friendly trend analysis options from dataset schema."""
+        if not profile:
+            return [
+                "Revenue over Time (Recommended)",
+                "Sales Quantity over Time",
+                "Number of Orders over Time",
+                "Customer Growth",
+                "Product Popularity",
+                "Country-wise Sales Trend",
+            ]
+
+        col_names = profile.get('column_names', [])
+        col_types = profile.get('column_types', {})
+
+        id_terms = ['id', 'code', 'no', 'number', 'key', 'index', 'row', 'sku']
+        metric_cols = [
+            c for c in col_names
+            if col_types.get(c) in ['integer', 'float'] and not any(term == c.lower() or c.lower().endswith(term) for term in id_terms)
+        ]
+        date_cols = [c for c in col_names if col_types.get(c) == 'datetime' or 'date' in c.lower() or 'time' in c.lower()]
+
+        options = []
+        has_time_series = len(date_cols) > 0
+
+        if has_time_series:
+            if any('price' in c.lower() or 'amount' in c.lower() or 'total' in c.lower() or 'revenue' in c.lower() or 'sales' in c.lower() for c in col_names):
+                options.append("Revenue over Time (Recommended)")
+            if any('quantity' in c.lower() or 'qty' in c.lower() for c in col_names):
+                options.append("Sales Quantity over Time")
+            if any('invoice' in c.lower() or 'order' in c.lower() or 'transaction' in c.lower() for c in col_names):
+                options.append("Number of Orders over Time")
+
+        if any('customer' in c.lower() or 'user' in c.lower() or 'client' in c.lower() for c in col_names):
+            options.append("Customer Growth" if has_time_series else "Top Customers by Volume")
+
+        if any('product' in c.lower() or 'description' in c.lower() or 'item' in c.lower() or 'stock' in c.lower() for c in col_names):
+            options.append("Product Popularity")
+
+        if any('country' in c.lower() or 'region' in c.lower() or 'state' in c.lower() or 'city' in c.lower() for c in col_names):
+            options.append("Country-wise Sales Trend")
+
+        if not options:
+            options = [
+                "Revenue over Time (Recommended)",
+                "Sales Quantity over Time",
+                "Number of Orders over Time",
+                "Customer Growth",
+                "Product Popularity",
+                "Country-wise Sales Trend",
+            ]
+
+        if not any('(recommended)' in opt.lower() for opt in options):
+            options[0] = f"{options[0]} (Recommended)"
+
+        seen = set()
+        clean_options = []
+        for opt in options:
+            if opt not in seen:
+                seen.add(opt)
+                clean_options.append(opt)
+
+        return clean_options
 
     def _handle_general_query(
         self, message: str, schema_context: str, chat_history: List[Dict], dataset_profile: Optional[Dict] = None

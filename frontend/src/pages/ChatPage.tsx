@@ -723,8 +723,11 @@ export default function ChatPage() {
                                       <button
                                         key={oIdx}
                                         onClick={() => {
-                                          const forecastPrompt = `Forecast ${cleanMetric} for next quarter`;
-                                          sendMessage(forecastPrompt);
+                                          const isForecastQuery = cleanContent.toLowerCase().includes('forecast') || cleanContent.toLowerCase().includes('predict');
+                                          const queryPrompt = isForecastQuery
+                                            ? `Forecast ${cleanMetric} for next quarter`
+                                            : `Show ${cleanMetric} trend`;
+                                          sendMessage(queryPrompt);
                                         }}
                                         className={`w-full flex items-center justify-between p-3.5 rounded-xl border text-left transition-all group ${
                                           isRec
