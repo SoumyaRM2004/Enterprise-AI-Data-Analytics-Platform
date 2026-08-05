@@ -3,7 +3,7 @@ import { chatbotAPI, datasetsAPI } from '../services/api';
 import {
   Send, Plus, MessageSquare, Database, BarChart3, Brain, Table as TableIcon,
   Trash2, Code, ChevronDown, Sparkles, Download, Copy, Play, TrendingUp,
-  DollarSign, Hash, Check, Clock
+  DollarSign, Hash, Check, Clock, HelpCircle
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import {
@@ -198,6 +198,18 @@ export default function ChatPage() {
       .replace(/_/g, ' ')
       .toLowerCase()
       .replace(/\b\w/g, (char) => char.toUpperCase());
+  };
+
+  const parseCleanContent = (rawContent: string): string => {
+    if (!rawContent) return '';
+    let content = rawContent.trim();
+    if (content.startsWith('{') && content.endsWith('}')) {
+      try {
+        const parsed = JSON.parse(content);
+        content = parsed.content || parsed.summary || parsed.message || '';
+      } catch {}
+    }
+    return content.replace(/\*\*Executed Query:\*\*[\s\S]*/i, '').trim();
   };
 
   const parseBusinessInsights = (rawContent: string): { paragraphs: string[], bullets: string[] } => {
@@ -567,9 +579,11 @@ export default function ChatPage() {
             <>
               {messages.map((msg, idx) => {
                 const isUser = msg.role === 'user';
+                const cleanContent = parseCleanContent(msg.content);
                 const { paragraphs, bullets } = parseBusinessInsights(msg.content);
                 const kpis = getKpiCards(msg);
                 const hasQueryResults = msg.query_result?.data?.rows?.length > 0;
+                const isClarification = msg.message_type === 'clarification' || (Boolean(msg.metadata?.options?.length) && !hasQueryResults);
                 const orderedColumns = getOrderedColumns(msg.query_result?.data?.columns || []);
                 const followups = getContextualFollowups(msg);
 
@@ -599,206 +613,240 @@ export default function ChatPage() {
                            7. Execution Metadata Footer
                         */
                         <>
-                          {/* 1. Business Insight Summary */}
-                          {(paragraphs.length > 0 || bullets.length > 0) && (
-                            <div className="space-y-3">
-                              <div className="flex items-center gap-2 text-primary-700">
-                                <Sparkles size={18} className="shrink-0" />
-                                <h3 className="text-sm font-bold uppercase tracking-wider">Business Insight Summary</h3>
+                          {/* Clarification Response Handling */}
+                          {isClarification ? (
+                            <div className="p-5 bg-gradient-to-b from-indigo-50/90 to-white border border-indigo-200/90 rounded-2xl space-y-4 shadow-sm">
+                              <div className="flex items-center gap-2 text-indigo-950">
+                                <HelpCircle size={18} className="text-indigo-600 shrink-0" />
+                                <h3 className="text-sm font-bold">{cleanContent || "Which metric would you like to forecast?"}</h3>
                               </div>
-                              {paragraphs.map((p, pIdx) => (
-                                <p key={pIdx} className="text-sm font-normal text-gray-800 leading-relaxed">
-                                  {p}
-                                </p>
-                              ))}
-                              {bullets.length > 0 && (
-                                <ul className="space-y-2 pt-1">
-                                  {bullets.map((b, bIdx) => (
-                                    <li key={bIdx} className="text-xs text-gray-700 flex items-start gap-2 leading-relaxed">
-                                      <span className="text-primary-600 font-extrabold text-sm leading-none">•</span>
-                                      <span>{b}</span>
-                                    </li>
-                                  ))}
-                                </ul>
+
+                              {msg.metadata?.options?.length > 0 && (
+                                <div className="space-y-2.5 pt-1">
+                                  {msg.metadata.options.map((opt: string, oIdx: number) => {
+                                    const isRec = opt.toLowerCase().includes('(recommended)');
+                                    const cleanMetric = opt.replace(/\s*\(recommended\)/i, '').trim();
+
+                                    return (
+                                      <button
+                                        key={oIdx}
+                                        onClick={() => {
+                                          const forecastPrompt = `Forecast ${cleanMetric} for next quarter`;
+                                          sendMessage(forecastPrompt);
+                                        }}
+                                        className={`w-full flex items-center justify-between p-3.5 rounded-xl border text-left transition-all group ${
+                                          isRec
+                                            ? 'bg-white border-indigo-300 hover:border-indigo-500 shadow-xs hover:shadow-md text-indigo-950'
+                                            : 'bg-white/80 border-gray-200 hover:border-indigo-300 text-gray-800'
+                                        }`}
+                                      >
+                                        <div className="flex items-center gap-3">
+                                          <div className={`w-4 h-4 rounded-full border flex items-center justify-center transition-colors ${isRec ? 'border-indigo-600 bg-indigo-50' : 'border-gray-400 group-hover:border-indigo-500'}`}>
+                                            <div className={`w-2 h-2 rounded-full ${isRec ? 'bg-indigo-600' : 'bg-transparent group-hover:bg-indigo-500'}`} />
+                                          </div>
+                                          <span className="text-xs font-semibold">{cleanMetric}</span>
+                                        </div>
+                                        {isRec && (
+                                          <span className="text-[10px] font-bold text-indigo-700 bg-indigo-100/80 border border-indigo-200/60 px-2.5 py-0.5 rounded-full uppercase tracking-wider">
+                                            Recommended
+                                          </span>
+                                        )}
+                                      </button>
+                                    );
+                                  })}
+                                </div>
                               )}
+                              <p className="text-[11px] text-indigo-700/80 font-medium pt-1">
+                                Select an option above or type a custom metric in the input field below.
+                              </p>
                             </div>
-                          )}
-
-                          {/* 2. KPI Cards */}
-                          {kpis.length > 0 && (
-                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
-                              {kpis.map((kpi, kIdx) => {
-                                const IconComp = kpi.icon;
-                                return (
-                                  <div
-                                    key={kIdx}
-                                    className={`p-3.5 rounded-xl border ${kpi.color} transition-all shadow-sm flex flex-col justify-between`}
-                                  >
-                                    <div className="flex items-center justify-between mb-1.5">
-                                      <span className="text-[11px] font-bold uppercase tracking-wider opacity-80">{kpi.label}</span>
-                                      <IconComp size={16} className="opacity-70" />
-                                    </div>
-                                    <div className="text-base font-extrabold tracking-tight truncate">{kpi.value}</div>
-                                    <div className="text-[10px] opacity-75 mt-1 truncate">{kpi.subtext}</div>
+                          ) : (
+                            /* Standard BI Card Output */
+                            <>
+                              {/* 1. Business Insight Summary */}
+                              {(paragraphs.length > 0 || bullets.length > 0) && (
+                                <div className="space-y-3">
+                                  <div className="flex items-center gap-2 text-primary-700">
+                                    <Sparkles size={18} className="shrink-0" />
+                                    <h3 className="text-sm font-bold uppercase tracking-wider">Business Insight Summary</h3>
                                   </div>
-                                );
-                              })}
-                            </div>
-                          )}
-
-                          {/* 3. Interactive Chart Visualization */}
-                          {renderInteractiveChart(msg)}
-
-                          {/* 4. Data Table with Export Toolbar */}
-                          {hasQueryResults && (
-                            <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
-                              {/* Header & Export Toolbar */}
-                              <div className="bg-gray-50/90 px-4 py-3 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
-                                <div className="flex items-center gap-2">
-                                  <TableIcon size={16} className="text-gray-600" />
-                                  <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Query Results</h4>
-                                  <span className="text-[11px] font-semibold text-gray-500 bg-gray-200/80 px-2 py-0.5 rounded-full">
-                                    {msg.query_result.data.row_count} rows
-                                  </span>
-                                </div>
-                                <div className="flex items-center gap-1.5">
-                                  <button
-                                    onClick={() => copyTableData(msg)}
-                                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-600 hover:text-gray-900 bg-white hover:bg-gray-100 border border-gray-200 px-2.5 py-1 rounded-lg transition-colors shadow-2xs"
-                                  >
-                                    <Copy size={12} />
-                                    <span>Copy Data</span>
-                                  </button>
-                                  <button
-                                    onClick={() => exportToCsv(msg)}
-                                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary-700 hover:text-primary-800 bg-primary-50 hover:bg-primary-100 border border-primary-200 px-2.5 py-1 rounded-lg transition-colors shadow-2xs"
-                                  >
-                                    <Download size={12} />
-                                    <span>Export CSV</span>
-                                  </button>
-                                </div>
-                              </div>
-
-                              {/* Table Content */}
-                              <div className="overflow-x-auto max-h-64">
-                                <table className="text-xs w-full text-left">
-                                  <thead>
-                                    <tr className="bg-gray-100/80 border-b border-gray-200 text-gray-700">
-                                      {orderedColumns.map((col: string) => (
-                                        <th key={col} className="px-3.5 py-2.5 font-bold uppercase tracking-wider whitespace-nowrap">
-                                          {cleanTitle(col)}
-                                        </th>
+                                  {paragraphs.map((p, pIdx) => (
+                                    <p key={pIdx} className="text-sm font-normal text-gray-800 leading-relaxed">
+                                      {p}
+                                    </p>
+                                  ))}
+                                  {bullets.length > 0 && (
+                                    <ul className="space-y-2 pt-1">
+                                      {bullets.map((b, bIdx) => (
+                                        <li key={bIdx} className="text-xs text-gray-700 flex items-start gap-2 leading-relaxed">
+                                          <span className="text-primary-600 font-extrabold text-sm leading-none">•</span>
+                                          <span>{b}</span>
+                                        </li>
                                       ))}
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-gray-100">
-                                    {msg.query_result.data.rows.slice(0, 50).map((row: any, i: number) => (
-                                      <tr key={i} className="hover:bg-gray-50/90 transition-colors">
-                                        {orderedColumns.map((col: string) => (
-                                          <td key={col} className="px-3.5 py-2 text-gray-700 font-medium whitespace-nowrap">
-                                            {formatValue(row[col], col)}
-                                          </td>
-                                        ))}
-                                      </tr>
-                                    ))}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          )}
+                                    </ul>
+                                  )}
+                                </div>
+                              )}
 
-                          {/* Options for Clarification Responses */}
-                          {msg.metadata?.options?.length > 0 && (
-                            <div className="pt-2">
-                              <p className="text-xs font-bold text-indigo-700 uppercase tracking-wider mb-2">Select metric for analysis/forecast:</p>
-                              <div className="flex flex-wrap gap-2">
-                                {msg.metadata.options.map((opt: string, oIdx: number) => (
-                                  <button
-                                    key={oIdx}
-                                    onClick={() => sendMessage(`Forecast ${opt} for next quarter`)}
-                                    className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 px-3.5 py-1.5 rounded-full font-semibold transition-all shadow-2xs hover:shadow-xs"
-                                  >
-                                    {opt}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
+                              {/* 2. KPI Cards */}
+                              {kpis.length > 0 && (
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3 pt-2">
+                                  {kpis.map((kpi, kIdx) => {
+                                    const IconComp = kpi.icon;
+                                    return (
+                                      <div
+                                        key={kIdx}
+                                        className={`p-3.5 rounded-xl border ${kpi.color} transition-all shadow-sm flex flex-col justify-between`}
+                                      >
+                                        <div className="flex items-center justify-between mb-1.5">
+                                          <span className="text-[11px] font-bold uppercase tracking-wider opacity-80">{kpi.label}</span>
+                                          <IconComp size={16} className="opacity-70" />
+                                        </div>
+                                        <div className="text-base font-extrabold tracking-tight truncate">{kpi.value}</div>
+                                        <div className="text-[10px] opacity-75 mt-1 truncate">{kpi.subtext}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
 
-                          {/* 5. Context-Aware Follow-up Questions */}
-                          {followups.length > 0 && (
-                            <div className="pt-2 border-t border-gray-100">
-                              <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2.5">Suggested Follow-ups</p>
-                              <div className="flex flex-wrap gap-2">
-                                {followups.map((q: string, qIdx: number) => (
-                                  <button
-                                    key={qIdx}
-                                    onClick={() => sendMessage(q)}
-                                    className="text-xs bg-primary-50/90 hover:bg-primary-100 text-primary-700 border border-primary-200/60 px-3.5 py-1.5 rounded-full transition-all font-semibold text-left shadow-2xs hover:shadow-xs"
-                                  >
-                                    {q}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          )}
+                              {/* 3. Interactive Chart Visualization */}
+                              {renderInteractiveChart(msg)}
 
-                          {/* 6. Expandable SQL Section */}
-                          {msg.sql_query && (
-                            <div className="pt-1 border-t border-gray-100">
-                              <div className="flex items-center justify-between">
-                                <button
-                                  onClick={() => toggleSql(idx)}
-                                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors"
-                                >
-                                  <Code size={14} />
-                                  <span>{expandedSql[idx] ? 'Hide SQL' : 'Show SQL'}</span>
-                                  <ChevronDown size={14} className={`transition-transform duration-200 ${expandedSql[idx] ? 'rotate-180' : ''}`} />
-                                </button>
-                                {expandedSql[idx] && (
-                                  <div className="flex items-center gap-2">
-                                    <button
-                                      onClick={() => copySql(msg.sql_query!)}
-                                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 px-2.5 py-1 rounded-md transition-colors"
-                                    >
-                                      <Copy size={12} />
-                                      <span>Copy SQL</span>
-                                    </button>
-                                    <button
-                                      onClick={() => sendMessage(msg.sql_query!)}
-                                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-md transition-colors"
-                                    >
-                                      <Play size={12} />
-                                      <span>Execute Again</span>
-                                    </button>
+                              {/* 4. Data Table with Export Toolbar */}
+                              {hasQueryResults && (
+                                <div className="border border-gray-200 rounded-xl overflow-hidden shadow-sm">
+                                  {/* Header & Export Toolbar */}
+                                  <div className="bg-gray-50/90 px-4 py-3 border-b border-gray-200 flex items-center justify-between flex-wrap gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <TableIcon size={16} className="text-gray-600" />
+                                      <h4 className="text-xs font-bold text-gray-800 uppercase tracking-wider">Query Results</h4>
+                                      <span className="text-[11px] font-semibold text-gray-500 bg-gray-200/80 px-2 py-0.5 rounded-full">
+                                        {msg.query_result.data.row_count} rows
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      <button
+                                        onClick={() => copyTableData(msg)}
+                                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-600 hover:text-gray-900 bg-white hover:bg-gray-100 border border-gray-200 px-2.5 py-1 rounded-lg transition-colors shadow-2xs"
+                                      >
+                                        <Copy size={12} />
+                                        <span>Copy Data</span>
+                                      </button>
+                                      <button
+                                        onClick={() => exportToCsv(msg)}
+                                        className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary-700 hover:text-primary-800 bg-primary-50 hover:bg-primary-100 border border-primary-200 px-2.5 py-1 rounded-lg transition-colors shadow-2xs"
+                                      >
+                                        <Download size={12} />
+                                        <span>Export CSV</span>
+                                      </button>
+                                    </div>
                                   </div>
+
+                                  {/* Table Content */}
+                                  <div className="overflow-x-auto max-h-64">
+                                    <table className="text-xs w-full text-left">
+                                      <thead>
+                                        <tr className="bg-gray-100/80 border-b border-gray-200 text-gray-700">
+                                          {orderedColumns.map((col: string) => (
+                                            <th key={col} className="px-3.5 py-2.5 font-bold uppercase tracking-wider whitespace-nowrap">
+                                              {cleanTitle(col)}
+                                            </th>
+                                          ))}
+                                        </tr>
+                                      </thead>
+                                      <tbody className="divide-y divide-gray-100">
+                                        {msg.query_result.data.rows.slice(0, 50).map((row: any, i: number) => (
+                                          <tr key={i} className="hover:bg-gray-50/90 transition-colors">
+                                            {orderedColumns.map((col: string) => (
+                                              <td key={col} className="px-3.5 py-2 text-gray-700 font-medium whitespace-nowrap">
+                                                {formatValue(row[col], col)}
+                                              </td>
+                                            ))}
+                                          </tr>
+                                        ))}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* 5. Context-Aware Follow-up Questions */}
+                              {followups.length > 0 && (
+                                <div className="pt-2 border-t border-gray-100">
+                                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-2.5">Suggested Follow-ups</p>
+                                  <div className="flex flex-wrap gap-2">
+                                    {followups.map((q: string, qIdx: number) => (
+                                      <button
+                                        key={qIdx}
+                                        onClick={() => sendMessage(q)}
+                                        className="text-xs bg-primary-50/90 hover:bg-primary-100 text-primary-700 border border-primary-200/60 px-3.5 py-1.5 rounded-full transition-all font-semibold text-left shadow-2xs hover:shadow-xs"
+                                      >
+                                        {q}
+                                      </button>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* 6. Expandable SQL Section */}
+                              {msg.sql_query && (
+                                <div className="pt-1 border-t border-gray-100">
+                                  <div className="flex items-center justify-between">
+                                    <button
+                                      onClick={() => toggleSql(idx)}
+                                      className="inline-flex items-center gap-1.5 text-xs font-semibold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-lg transition-colors"
+                                    >
+                                      <Code size={14} />
+                                      <span>{expandedSql[idx] ? 'Hide SQL' : 'Show SQL'}</span>
+                                      <ChevronDown size={14} className={`transition-transform duration-200 ${expandedSql[idx] ? 'rotate-180' : ''}`} />
+                                    </button>
+                                    {expandedSql[idx] && (
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          onClick={() => copySql(msg.sql_query!)}
+                                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-gray-600 hover:text-gray-900 bg-gray-100 hover:bg-gray-200 px-2.5 py-1 rounded-md transition-colors"
+                                        >
+                                          <Copy size={12} />
+                                          <span>Copy SQL</span>
+                                        </button>
+                                        <button
+                                          onClick={() => sendMessage(msg.sql_query!)}
+                                          className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2.5 py-1 rounded-md transition-colors"
+                                        >
+                                          <Play size={12} />
+                                          <span>Execute Again</span>
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {expandedSql[idx] && (
+                                    <div className="mt-3 p-4 bg-slate-900 rounded-xl shadow-inner border border-slate-800">
+                                      <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Executed SQLite Query</p>
+                                      <pre className="text-xs text-emerald-400 font-mono overflow-x-auto whitespace-pre leading-relaxed">{msg.sql_query}</pre>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* 7. Execution Metadata Footer */}
+                              <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-[11px] font-medium text-gray-400">
+                                <div className="flex items-center gap-3">
+                                  <span className="flex items-center gap-1">
+                                    <Clock size={11} />
+                                    Generated in 0.8s
+                                  </span>
+                                  <span>•</span>
+                                  <span>{msg.query_result?.data?.row_count || 0} rows returned</span>
+                                  <span>•</span>
+                                  <span>SQLite Engine</span>
+                                </div>
+                                {msg.metadata?.confidence && (
+                                  <span className="text-gray-500">Confidence: {Math.round(msg.metadata.confidence * 100)}%</span>
                                 )}
                               </div>
-                              {expandedSql[idx] && (
-                                <div className="mt-3 p-4 bg-slate-900 rounded-xl shadow-inner border border-slate-800">
-                                  <p className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Executed SQLite Query</p>
-                                  <pre className="text-xs text-emerald-400 font-mono overflow-x-auto whitespace-pre leading-relaxed">{msg.sql_query}</pre>
-                                </div>
-                              )}
-                            </div>
+                            </>
                           )}
-
-                          {/* 7. Execution Metadata Footer */}
-                          <div className="pt-2 border-t border-gray-100 flex items-center justify-between text-[11px] font-medium text-gray-400">
-                            <div className="flex items-center gap-3">
-                              <span className="flex items-center gap-1">
-                                <Clock size={11} />
-                                Generated in 0.8s
-                              </span>
-                              <span>•</span>
-                              <span>{msg.query_result?.data?.row_count || 0} rows returned</span>
-                              <span>•</span>
-                              <span>SQLite Engine</span>
-                            </div>
-                            {msg.metadata?.confidence && (
-                              <span className="text-gray-500">Confidence: {Math.round(msg.metadata.confidence * 100)}%</span>
-                            )}
-                          </div>
                         </>
                       )}
                     </div>

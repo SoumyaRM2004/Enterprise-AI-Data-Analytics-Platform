@@ -418,14 +418,16 @@ Respond with JSON:
         col_names = profile.get('column_names', []) if profile else []
         col_types = profile.get('column_types', {}) if profile else {}
 
-        # Identify numeric / metric columns from dataset schema
-        numeric_cols = [c for c in col_names if col_types.get(c) in ['integer', 'float']]
-        if not numeric_cols:
-            numeric_cols = col_names
+        # Filter out identifier / primary key columns (CustomerID, InvoiceNo, StockCode, RowID, etc.)
+        id_terms = ['id', 'code', 'no', 'number', 'key', 'index', 'row', 'invoice', 'sku']
+        metric_cols = [
+            c for c in col_names
+            if col_types.get(c) in ['integer', 'float'] and not any(term == c.lower() or c.lower().endswith(term) for term in id_terms)
+        ]
 
-        # Check if the user message explicitly mentions any available column or metric terms
+        # Check if user message explicitly specifies a metric
         has_metric = False
-        for c in col_names:
+        for c in metric_cols:
             if c.lower() in msg_lower:
                 has_metric = True
                 break
@@ -439,15 +441,46 @@ Respond with JSON:
 
         # If target metric is missing, DO NOT guess. Return a clarification response immediately.
         if not has_metric:
-            options = [c.replace('_', ' ').title() for c in numeric_cols[:4]]
-            if not options:
-                options = ["Revenue", "Quantity Sold", "Number of Orders", "Average Order Value"]
+            suggested_options = []
+            has_revenue_rec = False
+
+            for c in metric_cols:
+                c_lower = c.lower()
+                if ('price' in c_lower or 'amount' in c_lower or 'total' in c_lower or 'revenue' in c_lower or 'sales' in c_lower) and not has_revenue_rec:
+                    suggested_options.append('Revenue (Recommended)')
+                    has_revenue_rec = True
+                elif 'quantity' in c_lower or 'qty' in c_lower:
+                    suggested_options.append('Quantity Sold')
+                elif 'profit' in c_lower or 'margin' in c_lower:
+                    suggested_options.append('Profit')
+                else:
+                    suggested_options.append(c.replace('_', ' ').title())
+
+            # Check if dataset has invoice/order columns to suggest Number of Orders
+            if any('invoice' in c.lower() or 'order' in c.lower() for c in col_names):
+                if 'Number of Orders' not in suggested_options:
+                    suggested_options.append('Number of Orders')
+
+            if not has_revenue_rec and suggested_options:
+                suggested_options[0] = f"{suggested_options[0]} (Recommended)"
+
+            # Fallback options if dataset schema is incomplete
+            if not suggested_options:
+                suggested_options = ["Revenue (Recommended)", "Quantity Sold", "Number of Orders"]
+
+            # Remove duplicates while preserving order
+            seen = set()
+            clean_options = []
+            for opt in suggested_options:
+                if opt not in seen:
+                    seen.add(opt)
+                    clean_options.append(opt)
 
             return {
                 'type': 'clarification',
                 'content': 'Which metric would you like to forecast?',
-                'options': options,
-                'follow_up_questions': options,
+                'options': clean_options,
+                'follow_up_questions': clean_options,
                 'confidence': 1.0,
             }
 
