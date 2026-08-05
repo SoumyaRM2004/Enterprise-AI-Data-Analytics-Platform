@@ -1,5 +1,5 @@
 """
-Chatbot engine - handles NL-to-SQL, AI insights, and conversational responses.
+Chatbot engine - handles NL-to-SQL with AST parsing, repair loop, intent routing, and AI insights.
 """
 
 import json
@@ -15,30 +15,53 @@ logger = logging.getLogger(__name__)
 
 
 class ChatbotEngine:
-    """Main chatbot engine with NL-to-SQL and AI insights."""
+    """Production-grade AI Chatbot Engine for NL-to-SQL, analytics, and forecasting."""
 
-    SYSTEM_PROMPT = """You are an expert data analytics AI assistant. You help users analyze their data,
-generate insights, create visualizations, and answer questions about their datasets.
+    SYSTEM_PROMPT = """You are an expert Data Analytics and SQL Assistant.
 
-When users ask questions about data:
-1. If they want to query data, generate a SQL query
-2. If they want insights, analyze the data profile
-3. If they want visualizations, suggest chart types
-4. Always explain your findings in plain language
+Your job is to understand the user's intent and return EXACTLY ONE valid JSON object.
 
-Your response format should be a JSON object with:
+Available response types:
+
+1. "sql"
+Use when the user is asking about historical, existing, or current data (e.g., monthly sales trends, top 10 customers, average order value, sales by country, highest selling products, monthly revenue, compare sales between categories).
+
+2. "forecast"
+Use ONLY when the user explicitly asks about future values or predictions (e.g., predict next month sales, forecast next quarter revenue, estimate future demand, predict customer growth, sales projection). Return the historical SQL required for forecasting along with the recommended forecasting method.
+
+3. "clarification"
+Use when the user's request is ambiguous or lacks required information (e.g., "predict next quarter", "show best products", "analyze performance"). Ask ONE concise clarification question instead of guessing.
+
+4. "answer" (or "text")
+Use when the question is conceptual and does not require SQL (e.g., "What is SQL?", "Explain correlation.", "What is regression?").
+
+Rules:
+- Decide the intent yourself using the user's request.
+- Do NOT rely on keywords alone. Understand the semantic meaning of the question.
+- "Trend" means historical analysis unless the user explicitly asks to predict the future.
+- Historical analysis MUST return type "sql".
+- Future prediction MUST return type "forecast".
+- Never return more than one response type or multiple JSON objects.
+- Never explain your reasoning outside the JSON.
+- Never generate SQL for non-SQL responses.
+- If required information is missing, return a "clarification" response instead of guessing.
+- Use standard SQLite SELECT queries (table name 'df'). Use only tables and columns from the provided schema. Never invent columns or tables.
+
+Your response MUST be a single valid JSON object:
 {
-    "type": "text" | "sql" | "chart" | "insight" | "forecast",
-    "content": "your response text",
-    "sql_query": "SQL query if type is sql",
-    "chart_suggestion": {"type": "chart_type", "x": "column", "y": "column"},
+    "type": "sql" | "forecast" | "chart" | "insight" | "clarification" | "answer",
+    "content": "natural language response / explanation / clarifying question",
+    "sql_query": "SELECT ... FROM df ... (for sql or forecast)",
+    "confidence": 0.95,
+    "reasoning": "Brief explanation of query logic",
+    "chart_suggestion": {"type": "bar/line/pie/scatter", "x": "column", "y": "column"},
+    "recommended_method": "holt_winters",
     "follow_up_questions": ["question1", "question2"]
-}
-
-Be helpful, concise, and accurate. Use the dataset schema to inform your answers."""
+}"""
 
     def __init__(self):
         self.llm = LLMProviderFactory.create()
+        self._cache = {}
 
     def process_message(
         self,
@@ -46,19 +69,33 @@ Be helpful, concise, and accurate. Use the dataset schema to inform your answers
         dataset_profile: Optional[Dict] = None,
         chat_history: Optional[List[Dict]] = None,
     ) -> Dict[str, Any]:
-        """Process a user message and generate a response."""
+        """Process user message using intent routing, AST validation, and repair loops."""
 
         if not chat_history:
             chat_history = []
 
-        # Build context with dataset schema
-        schema_context = self._build_schema_context(dataset_profile)
+        # Check SQL Cache
+        cache_key = (
+            dataset_profile.get('name', 'ds') if dataset_profile else 'no_ds',
+            message.strip().lower()
+        )
+        if cache_key in self._cache:
+            logger.info(f"Returning cached chatbot response for: {message}")
+            return self._cache[cache_key]
 
-        # Classify the user's intent
+        # Extract conversational state memory across turns
+        conv_state = self._extract_conversational_state(chat_history)
+
+        # Build rich schema context
+        schema_context = self._build_schema_context(dataset_profile, question=message)
+
+        # Classify intent
         intent = self._classify_intent(message, dataset_profile)
 
         if intent == 'sql':
-            res = self._handle_nl_to_sql(message, schema_context, chat_history, dataset_profile)
+            res = self._handle_nl_to_sql_with_repair(
+                message, schema_context, chat_history, dataset_profile, conv_state
+            )
         elif intent == 'insight':
             res = self._handle_insight_request(message, schema_context, dataset_profile, chat_history)
         elif intent == 'chart':
@@ -68,113 +105,257 @@ Be helpful, concise, and accurate. Use the dataset schema to inform your answers
         else:
             res = self._handle_general_query(message, schema_context, chat_history, dataset_profile)
 
+        # Handle API key missing / offline fallback
         if isinstance(res, dict) and ('error' in res or (isinstance(res.get('content'), str) and res.get('content', '').startswith('Error:'))):
             return self._generate_dynamic_fallback(message, dataset_profile, intent)
+
+        # Cache high confidence SQL responses
+        if isinstance(res, dict) and res.get('type') in ['sql', 'chart', 'insight'] and res.get('confidence', 1.0) >= 0.8:
+            self._cache[cache_key] = res
 
         return res
 
     def _classify_intent(self, message: str, profile: Optional[Dict] = None) -> str:
-        """Classify user message intent."""
-        message_lower = message.lower()
+        """Classify user message intent into sql, forecast, chart, insight, or general."""
+        msg = message.lower()
 
-        # SQL intent patterns
-        sql_patterns = [
-            'show', 'find', 'get', 'list', 'filter', 'count', 'how many',
-            'which', 'who', 'select', 'where', 'group by', 'average',
-            'total', 'sum', 'max', 'min', 'top', 'bottom', 'compare',
-            'between', 'greater than', 'less than', 'equal to',
-        ]
+        # Explicit future prediction words (excluding 'trend' which defaults to historical SQL)
+        forecast_words = ['predict', 'forecast', 'future', 'next month', 'next quarter', 'next year', 'projection', 'estimate']
+        chart_words = ['chart', 'graph', 'plot', 'visualize', 'visualization', 'bar chart', 'line chart', 'pie chart', 'scatter']
+        insight_words = ['insight', 'analyze', 'analysis', 'pattern', 'correlation', 'anomaly', 'outlier', 'recommend', 'suggest', 'why did', 'cause', 'explain', 'overview']
+        sql_words = ['show', 'find', 'get', 'list', 'filter', 'count', 'how many', 'which', 'who', 'select', 'where', 'group by', 'average', 'total', 'sum', 'max', 'min', 'top', 'bottom', 'compare', 'trend']
 
-        # Chart intent patterns
-        chart_patterns = [
-            'chart', 'graph', 'plot', 'visualize', 'visualization',
-            'bar chart', 'line chart', 'pie chart', 'scatter',
-        ]
-
-        # Forecast intent patterns
-        forecast_patterns = [
-            'predict', 'forecast', 'future', 'next month', 'next year',
-            'trend', 'projection', 'estimate',
-        ]
-
-        # Insight intent patterns
-        insight_patterns = [
-            'insight', 'analyze', 'analysis', 'pattern', 'correlation',
-            'relationship', 'anomaly', 'unusual', 'outlier',
-            'recommend', 'suggest', 'improve', 'optimize',
-            'why did', 'reason', 'cause', 'explain',
-            'summary', 'overview', 'report',
-        ]
-
-        if any(p in message_lower for p in forecast_patterns):
+        if any(w in msg for w in forecast_words):
             return 'forecast'
-        elif any(p in message_lower for p in chart_patterns):
+        elif any(w in msg for w in chart_words):
             return 'chart'
-        elif any(p in message_lower for p in insight_patterns):
+        elif any(w in msg for w in insight_words):
             return 'insight'
-        elif any(p in message_lower for p in sql_patterns):
+        elif any(w in msg for w in sql_words):
             return 'sql'
         else:
-            return 'sql'  # Default to SQL for data questions
+            return 'sql'
 
-    def _handle_nl_to_sql(
-        self, message: str, schema_context: str, chat_history: List[Dict], dataset_profile: Optional[Dict] = None
+    def _extract_conversational_state(self, chat_history: List[Dict]) -> Dict[str, Any]:
+        """Extract state memory from recent chat history turns."""
+        state = {}
+        for msg in reversed(chat_history[-6:]):
+            if isinstance(msg, dict):
+                if msg.get('sql_query'):
+                    state.setdefault('last_sql', msg['sql_query'])
+                if msg.get('chart_config'):
+                    state.setdefault('last_chart', msg['chart_config'])
+        return state
+
+    def _build_schema_context(self, profile: Optional[Dict], question: Optional[str] = None) -> str:
+        """Build rich schema context with column types, nullability, unique values, stats, and sample rows."""
+        if not profile:
+            return "No dataset schema available."
+
+        columns = profile.get('column_names', [])
+        col_types = profile.get('column_types', {})
+        data_prof = profile.get('data_profile', {})
+        sample_rows = profile.get('sample_data', [])
+
+        # Smart column selection for wide datasets (> 25 columns)
+        if len(columns) > 25 and question:
+            q_terms = set(re.findall(r'\w+', question.lower()))
+            relevant_cols = []
+            for col in columns:
+                if any(term in col.lower() for term in q_terms if len(term) > 2):
+                    relevant_cols.append(col)
+            # Add essential numeric and date columns
+            for col in columns:
+                if col not in relevant_cols:
+                    t = str(col_types.get(col, '')).lower()
+                    if t in ['integer', 'float', 'datetime'] or 'date' in col.lower() or 'time' in col.lower():
+                        relevant_cols.append(col)
+                if len(relevant_cols) >= 20:
+                    break
+            for col in columns:
+                if col not in relevant_cols:
+                    relevant_cols.append(col)
+                if len(relevant_cols) >= 20:
+                    break
+            columns_to_show = relevant_cols
+        else:
+            columns_to_show = columns
+
+        schema_dict = {}
+        for col in columns_to_show:
+            c_type = col_types.get(col, 'string')
+            c_info = data_prof.get(col, {})
+            c_meta = {
+                'type': c_type,
+                'null_percent': c_info.get('null_percent', 0),
+                'unique_count': c_info.get('unique_count', 'unknown'),
+            }
+            if 'mean' in c_info:
+                c_meta['min'] = c_info.get('min')
+                c_meta['max'] = c_info.get('max')
+                c_meta['mean'] = c_info.get('mean')
+            if 'top_values' in c_info and isinstance(c_info['top_values'], dict):
+                c_meta['unique_values'] = list(c_info['top_values'].keys())[:5]
+
+            # Extract sample values for this column from sample_rows
+            col_samples = []
+            if isinstance(sample_rows, list):
+                for row in sample_rows[:3]:
+                    if isinstance(row, dict) and col in row:
+                        val = row[col]
+                        if val is not None and str(val) not in col_samples:
+                            col_samples.append(str(val))
+            if col_samples:
+                c_meta['sample_values'] = col_samples[:3]
+
+            schema_dict[col] = c_meta
+
+        output = [
+            f"Table Name: df",
+            f"Total Rows: {profile.get('row_count', 'unknown')}",
+            f"Total Columns: {profile.get('column_count', len(columns))}",
+            "\nRich Database Schema Metadata:",
+            json.dumps(schema_dict, indent=2, default=str),
+        ]
+
+        if sample_rows and isinstance(sample_rows, list):
+            output.append("\nSample Data Rows (First 3 rows):")
+            output.append(json.dumps(sample_rows[:3], indent=2, default=str))
+
+        return '\n'.join(output)
+
+    def _handle_nl_to_sql_with_repair(
+        self,
+        message: str,
+        schema_context: str,
+        chat_history: List[Dict],
+        dataset_profile: Optional[Dict] = None,
+        conv_state: Optional[Dict] = None,
     ) -> Dict[str, Any]:
-        """Handle natural language to SQL conversion."""
+        """Handle NL-to-SQL with sqlglot AST parsing and a multi-turn self-correction repair loop."""
+        from analytics.sql_engine import SQLExecutor
+
+        available_cols = dataset_profile.get('column_names', []) if dataset_profile else []
+
         prompt = f"""{self.SYSTEM_PROMPT}
 
-Dataset Schema:
+Dataset Context:
 {schema_context}
+
+Conversational Memory State:
+{json.dumps(conv_state or {}, indent=2)}
 
 User Question: {message}
 
-Based on the question, generate a SQL query that would answer it.
-The data is in a pandas DataFrame context, so use standard SQL syntax.
-
-Respond with JSON:
-{{"type": "sql", "content": "explanation", "sql_query": "SELECT ..."}}"""
+Rules:
+1. Generate standard SQLite SELECT query targeting table 'df'.
+2. Use ONLY existing columns from the schema.
+3. If intent is ambiguous or required metrics are missing (e.g., "predict next quarter"), set type to "clarification" and ask one clear question.
+4. Set "confidence" score (0.0 to 1.0). If confidence < 0.6, ask a clarification question."""
 
         messages = [{'role': 'system', 'content': prompt}]
         for msg in chat_history[-settings.CHAT_MAX_CONTEXT_MESSAGES:]:
             messages.append({'role': msg['role'], 'content': msg['content']})
 
         result = self.llm.generate(messages)
+        response_data = self._parse_response(result.get('content', ''))
 
-        # Parse response
-        try:
-            response_data = self._parse_response(result['content'])
+        # Clarification check
+        if response_data.get('type') == 'clarification' or response_data.get('confidence', 1.0) < 0.6:
+            if not response_data.get('content'):
+                response_data['content'] = "Could you please specify which metric or column you would like to analyze?"
+            response_data['type'] = 'clarification'
+            return response_data
+
+        # SQL Repair Loop (up to 2 retries)
+        max_retries = 2
+        for attempt in range(max_retries + 1):
             if response_data.get('type') == 'sql' and response_data.get('sql_query'):
-                # Validate and sanitize the SQL
-                sql = response_data['sql_query']
-                validated_sql = self._validate_sql(sql)
-                response_data['sql_query'] = validated_sql
-                return response_data
-        except Exception:
-            pass
+                sql = response_data['sql_query'].strip()
+                is_valid, err_msg = SQLExecutor.validate_sql_ast(sql, available_cols)
 
-        # Fallback: try to extract SQL from the response
-        return self._extract_sql_from_text(result['content'])
+                if is_valid:
+                    response_data['sql_query'] = sql.rstrip(';')
+                    return response_data
+
+                logger.warning(f"SQL AST validation attempt {attempt + 1} failed: {err_msg}")
+                if attempt < max_retries:
+                    repair_msg = (
+                        f"The generated SQL failed AST validation with error: {err_msg}.\n"
+                        f"Failed SQL: {sql}\n"
+                        f"Available columns: {', '.join(available_cols)}\n"
+                        f"Please return a corrected JSON response with a valid SQL query."
+                    )
+                    messages.append({'role': 'assistant', 'content': result.get('content', '')})
+                    messages.append({'role': 'user', 'content': repair_msg})
+                    result = self.llm.generate(messages)
+                    response_data = self._parse_response(result.get('content', ''))
+
+        # Fallback to text extraction
+        extracted = self._extract_sql_from_text(result.get('content', ''))
+        if extracted.get('sql_query'):
+            is_valid, _ = SQLExecutor.validate_sql_ast(extracted['sql_query'], available_cols)
+            if is_valid:
+                return extracted
+
+        return self._generate_dynamic_fallback(message, dataset_profile, 'sql')
+
+    def explain_sql_results(
+        self,
+        user_message: str,
+        sql_query: str,
+        query_result: Dict[str, Any],
+    ) -> str:
+        """Synthesize natural language explanations from executed SQL query results."""
+        try:
+            data = query_result.get('data', {})
+            rows = data.get('rows', [])
+            cols = data.get('columns', [])
+            total_rows = query_result.get('total_rows', len(rows))
+
+            if not rows:
+                return "The query executed successfully but returned no matching data records."
+
+            sample_results = rows[:10]
+            prompt = f"""You are a senior data analyst explaining SQL query results to a decision-maker.
+
+User Question: {user_message}
+Executed SQL: {sql_query}
+Total Matching Records: {total_rows:,}
+Columns Returned: {cols}
+Result Sample (First {len(sample_results)} rows):
+{json.dumps(sample_results, indent=2, default=str)}
+
+Write a concise 2-3 sentence business summary explaining the key findings from these results in direct answer to the user's question. Focus on key numbers, top values, or notable patterns."""
+
+            res = self.llm.generate([{'role': 'user', 'content': prompt}])
+            summary = res.get('content', '').strip()
+            if summary and not summary.startswith('Error:'):
+                return summary
+        except Exception as e:
+            logger.error(f"Error synthesizing SQL results explanation: {e}")
+
+        return f"Query returned {query_result.get('total_rows', 0):,} results."
 
     def _handle_insight_request(
         self, message: str, schema_context: str, profile: Dict, chat_history: List[Dict]
     ) -> Dict[str, Any]:
         """Handle AI insight requests."""
-        # Include data statistics in the prompt
         stats = self._get_data_statistics(profile)
 
         prompt = f"""{self.SYSTEM_PROMPT}
 
-Dataset Schema:
+Dataset Context:
 {schema_context}
 
-Data Statistics:
+Summary Statistics:
 {stats}
 
 User Request: {message}
 
-Provide a detailed analysis and insights based on the data.
+Provide detailed data insights and findings.
 Respond with JSON:
-{{"type": "insight", "content": "detailed insight text", "key_findings": ["finding1", "finding2"]}}"""
+{{"type": "insight", "content": "detailed insight text", "key_findings": ["finding1", "finding2"], "confidence": 0.9, "chart_suggestion": {{"type": "bar", "x": "col1", "y": "col2"}}}}"""
 
         messages = [{'role': 'system', 'content': prompt}]
         for msg in chat_history[-settings.CHAT_MAX_CONTEXT_MESSAGES:]:
@@ -198,17 +379,17 @@ Respond with JSON:
     def _handle_chart_request(
         self, message: str, schema_context: str, profile: Dict, chat_history: List[Dict]
     ) -> Dict[str, Any]:
-        """Handle chart/visualization requests."""
+        """Handle visualization requests."""
         prompt = f"""{self.SYSTEM_PROMPT}
 
-Dataset Schema:
+Dataset Context:
 {schema_context}
 
 User Request: {message}
 
-Suggest the best chart type and configuration for visualizing this data.
+Suggest the best chart visualization for this request.
 Respond with JSON:
-{{"type": "chart", "content": "explanation", "chart_suggestion": {{"type": "bar/line/pie/scatter", "x": "column_name", "y": "column_name"}}}}"""
+{{"type": "chart", "content": "chart summary", "chart_suggestion": {{"type": "bar/line/pie/scatter", "x": "column_name", "y": "column_name"}}, "confidence": 0.95}}"""
 
         messages = [{'role': 'system', 'content': prompt}]
         for msg in chat_history[-settings.CHAT_MAX_CONTEXT_MESSAGES:]:
@@ -235,14 +416,14 @@ Respond with JSON:
         """Handle forecasting requests."""
         prompt = f"""{self.SYSTEM_PROMPT}
 
-Dataset Schema:
+Dataset Context:
 {schema_context}
 
 User Request: {message}
 
-Provide forecasting guidance.
+Provide time-series forecasting guidance and parameters.
 Respond with JSON:
-{{"type": "forecast", "content": "forecasting advice", "recommended_method": "arima/sarimax/holt_winters", "suggested_columns": {{"target": "col", "date": "col"}}, "suggested_horizon": 30}}"""
+{{"type": "forecast", "content": "forecasting advice", "recommended_method": "arima/holt_winters", "suggested_columns": {{"target": "col", "date": "col"}}, "suggested_horizon": 30}}"""
 
         messages = [{'role': 'system', 'content': prompt}]
         for msg in chat_history[-settings.CHAT_MAX_CONTEXT_MESSAGES:]:
@@ -260,21 +441,19 @@ Respond with JSON:
         return {
             'type': 'forecast',
             'content': result['content'],
-            'recommended_method': 'arima',
+            'recommended_method': 'holt_winters',
         }
 
     def _handle_general_query(
         self, message: str, schema_context: str, chat_history: List[Dict], dataset_profile: Optional[Dict] = None
     ) -> Dict[str, Any]:
-        """Handle general queries."""
+        """Handle general conversational queries."""
         prompt = f"""{self.SYSTEM_PROMPT}
 
-Dataset Schema:
+Dataset Context:
 {schema_context}
 
-User Message: {message}
-
-Respond helpfully about the dataset and what analyses are possible."""
+User Message: {message}"""
 
         messages = [{'role': 'system', 'content': prompt}]
         for msg in chat_history[-settings.CHAT_MAX_CONTEXT_MESSAGES:]:
@@ -287,35 +466,9 @@ Respond helpfully about the dataset and what analyses are possible."""
             'content': result['content'],
         }
 
-    def _build_schema_context(self, profile: Optional[Dict]) -> str:
-        """Build a schema context string from dataset profile."""
-        if not profile:
-            return "No dataset schema available."
-
-        lines = []
-        if profile.get('column_names'):
-            lines.append("Columns:")
-            for col in profile['column_names']:
-                col_type = profile.get('column_types', {}).get(col, 'unknown')
-                col_info = profile.get('data_profile', {}).get(col, {})
-                lines.append(f"  - {col}: {col_type} (null: {col_info.get('null_percent', 0)}%, unique: {col_info.get('unique_count', 0)})")
-
-        if profile.get('data_profile'):
-            lines.append("\nColumn Statistics:")
-            for col, info in list(profile['data_profile'].items())[:10]:
-                if isinstance(info, dict):
-                    if 'mean' in info:
-                        lines.append(f"  {col}: mean={info['mean']}, min={info.get('min')}, max={info.get('max')}")
-                    elif 'top_values' in info:
-                        top = list(info['top_values'].keys())[:3]
-                        lines.append(f"  {col}: categories={top}")
-
-        lines.append(f"\nTotal rows: {profile.get('row_count', 'unknown')}")
-        return '\n'.join(lines)
-
     def _get_data_statistics(self, profile: Dict) -> str:
         """Get summary statistics from profile."""
-        if not profile.get('data_profile'):
+        if not profile or not profile.get('data_profile'):
             return "No statistics available."
 
         stats = []
@@ -330,7 +483,6 @@ Respond helpfully about the dataset and what analyses are possible."""
 
     def _parse_response(self, text: str) -> Dict[str, Any]:
         """Parse LLM response as JSON."""
-        # Try to extract JSON from the response
         json_match = re.search(r'\{.*\}', text, re.DOTALL)
         if json_match:
             try:
@@ -339,22 +491,8 @@ Respond helpfully about the dataset and what analyses are possible."""
                 pass
         return {'type': 'text', 'content': text}
 
-    def _validate_sql(self, sql: str) -> str:
-        """Validate and sanitize SQL query."""
-        sql = sql.strip().rstrip(';')
-
-        # Forbidden keywords
-        forbidden = ['DELETE', 'DROP', 'ALTER', 'CREATE', 'INSERT', 'UPDATE', 'EXEC', 'GRANT', 'REVOKE']
-        sql_upper = sql.upper()
-        for keyword in forbidden:
-            if keyword in sql_upper:
-                raise ValueError(f"Forbidden SQL keyword: {keyword}")
-
-        return sql
-
     def _extract_sql_from_text(self, text: str) -> Dict[str, Any]:
-        """Try to extract a SQL query from free-text response."""
-        # Look for SQL patterns
+        """Extract SQL query from free-text response."""
         sql_pattern = re.search(
             r'(?:SELECT|select)\s+.*?(?:FROM|from)\s+\w+.*?(?:;|$)',
             text, re.DOTALL | re.IGNORECASE
@@ -365,6 +503,7 @@ Respond helpfully about the dataset and what analyses are possible."""
                 'type': 'sql',
                 'content': 'Here is the SQL query for your question:',
                 'sql_query': sql,
+                'confidence': 0.85,
             }
 
         return {
@@ -373,7 +512,7 @@ Respond helpfully about the dataset and what analyses are possible."""
         }
 
     def _generate_dynamic_fallback(self, message: str, profile: Optional[Dict], intent: str) -> Dict[str, Any]:
-        """Generate smart dynamic response directly from dataset schema when LLM API Key is missing or offline."""
+        """Generate smart dynamic response directly from dataset schema when LLM API is offline or missing."""
         if not profile:
             return {
                 'type': 'text',

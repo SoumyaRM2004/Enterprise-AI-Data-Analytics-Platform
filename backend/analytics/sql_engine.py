@@ -19,16 +19,61 @@ class SQLExecutor:
     def __init__(self, df: pd.DataFrame):
         self.df = df.copy()
 
+    @classmethod
+    def validate_sql_ast(cls, sql: str, available_columns: Optional[list] = None) -> tuple[bool, Optional[str]]:
+        """Validate SQL query using sqlglot AST parsing."""
+        import sqlglot
+        import sqlglot.expressions as exp
+
+        sql_clean = sql.strip().rstrip(';')
+
+        if len(sql_clean) > cls.MAX_QUERY_LENGTH:
+            return False, f"Query exceeds maximum length of {cls.MAX_QUERY_LENGTH} characters."
+
+        try:
+            parsed = sqlglot.parse_one(sql_clean, read='sqlite')
+        except Exception as parse_err:
+            return False, f"SQL syntax parsing error: {parse_err}"
+
+        # Check for forbidden mutations in AST first
+        for node in parsed.walk():
+            if isinstance(node, (exp.Insert, exp.Update, exp.Delete, exp.Drop, exp.Create, exp.Alter, exp.Command, exp.Kill)):
+                return False, f"Forbidden SQL operation detected: {node.key.upper()}"
+
+        if not parsed or not isinstance(parsed, (exp.Select, exp.Union)):
+            return False, "Query must be a valid SELECT statement."
+
+        # Validate column names against available schema columns if provided
+        if available_columns:
+            # Collect aliases defined in SELECT / aggregate expressions
+            select_aliases = {alias.alias.lower() for alias in parsed.find_all(exp.Alias) if alias.alias}
+            valid_cols_lower = {c.lower() for c in available_columns} | select_aliases
+
+            referenced_cols = []
+            for col_node in parsed.find_all(exp.Column):
+                col_name = col_node.name.strip('`"\'')
+                if col_name and col_name != '*':
+                    referenced_cols.append(col_name)
+
+            invalid_cols = [c for c in referenced_cols if c.lower() not in valid_cols_lower]
+            if invalid_cols:
+                unique_invalid = sorted(list(set(invalid_cols)))
+                return False, f"Invalid column(s) referenced: {', '.join(unique_invalid)}. Available columns: {', '.join(available_columns)}"
+
+        return True, None
+
     def execute(self, sql: str) -> Dict[str, Any]:
         """Execute SQL query safely using in-memory SQLite / pandas execution."""
         import sqlite3
 
         sql_clean = sql.strip().rstrip(';')
 
-        # Security checks
-        if len(sql_clean) > self.MAX_QUERY_LENGTH:
-            raise ValueError(f"Query too long. Maximum {self.MAX_QUERY_LENGTH} characters.")
+        # Run sqlglot AST validation first
+        is_valid, err_msg = self.validate_sql_ast(sql_clean, list(self.df.columns))
+        if not is_valid:
+            raise ValueError(err_msg)
 
+        # Security keyword checks
         sql_upper = sql_clean.upper()
         for keyword in self.FORBIDDEN_KEYWORDS:
             if keyword in sql_upper:

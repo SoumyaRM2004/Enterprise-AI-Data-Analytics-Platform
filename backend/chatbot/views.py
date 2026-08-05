@@ -84,9 +84,11 @@ class ChatSendView(APIView):
         dataset_profile = None
         if session.dataset and session.dataset.status == 'ready':
             dataset_profile = {
+                'name': session.dataset.name,
                 'column_names': session.dataset.column_names,
                 'column_types': session.dataset.column_types,
                 'data_profile': session.dataset.data_profile,
+                'sample_data': session.dataset.sample_data,
                 'row_count': session.dataset.row_count,
                 'column_count': session.dataset.column_count,
             }
@@ -108,6 +110,8 @@ class ChatSendView(APIView):
             metadata={
                 'key_findings': response.get('key_findings', []),
                 'follow_up_questions': response.get('follow_up_questions', []),
+                'confidence': response.get('confidence', 1.0),
+                'reasoning': response.get('reasoning', ''),
             },
             sql_query=response.get('sql_query', ''),
             query_result=response.get('query_result', {}),
@@ -115,7 +119,7 @@ class ChatSendView(APIView):
             token_count=response.get('token_count', 0),
         )
 
-        # If SQL was generated, execute it
+        # If SQL was generated, execute it and synthesize result explanation
         if response.get('type') == 'sql' and response.get('sql_query') and session.dataset:
             try:
                 dataset = session.dataset
@@ -124,8 +128,15 @@ class ChatSendView(APIView):
                 executor = SQLExecutor(processor.df)
                 result = executor.execute(response['sql_query'])
 
+                nl_explanation = engine.explain_sql_results(
+                    user_message=serializer.validated_data['message'],
+                    sql_query=response['sql_query'],
+                    query_result=result,
+                )
+
                 assistant_msg.query_result = result
                 assistant_msg.message_type = ChatMessage.MessageType.TABLE
+                assistant_msg.content = f"{nl_explanation}\n\n**Executed Query:** `{response['sql_query']}`"
                 assistant_msg.save()
 
                 AuditLog.objects.create(
