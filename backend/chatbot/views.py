@@ -120,8 +120,8 @@ class ChatSendView(APIView):
             token_count=response.get('token_count', 0),
         )
 
-        # If SQL was generated, execute it and synthesize result explanation
-        if response.get('type') == 'sql' and response.get('sql_query') and session.dataset:
+        # If SQL or Forecast was generated, execute SQL and process results
+        if response.get('type') in ['sql', 'forecast'] and response.get('sql_query') and session.dataset:
             try:
                 dataset = session.dataset
                 processor = DataProcessor(str(dataset.file.path))
@@ -129,21 +129,82 @@ class ChatSendView(APIView):
                 executor = SQLExecutor(processor.df)
                 result = executor.execute(response['sql_query'])
 
-                nl_explanation = engine.explain_sql_results(
-                    user_message=serializer.validated_data['message'],
-                    sql_query=response['sql_query'],
-                    query_result=result,
-                )
+                if response.get('type') == 'forecast':
+                    from forecasting.engine import ForecastEngine
 
-                assistant_msg.query_result = result
-                assistant_msg.message_type = ChatMessage.MessageType.TABLE
-                assistant_msg.content = nl_explanation
+                    # Convert SQL query result rows into a DataFrame for time-series forecasting
+                    sql_rows = result.get('data', {}).get('rows', [])
+                    sql_cols = result.get('data', {}).get('columns', [])
+
+                    if sql_rows and len(sql_cols) >= 2:
+                        res_df = pd.DataFrame(sql_rows)
+                        date_col = sql_cols[0]
+                        target_col = sql_cols[1]
+
+                        forecast_engine = ForecastEngine(res_df)
+                        fc_output = forecast_engine.forecast(
+                            method=response.get('recommended_method', 'holt_winters'),
+                            target_column=target_col,
+                            date_column=date_col,
+                            horizon=6,
+                        )
+
+                        # Construct combined period | actual | forecast rows
+                        combined_rows = []
+                        hist_dates = fc_output['historical']['dates']
+                        hist_vals = fc_output['historical']['values']
+                        for d, v in zip(hist_dates, hist_vals):
+                            combined_rows.append({
+                                'period': str(d),
+                                'actual': round(float(v), 2) if v is not None else None,
+                                'forecast': None,
+                            })
+
+                        fc_dates = fc_output['forecast']['dates']
+                        fc_vals = fc_output['forecast']['values']
+                        for d, v in zip(fc_dates, fc_vals):
+                            combined_rows.append({
+                                'period': str(d),
+                                'actual': None,
+                                'forecast': round(float(v), 2) if v is not None else None,
+                            })
+
+                        nl_explanation = engine.explain_forecast_results(
+                            user_message=serializer.validated_data['message'],
+                            target_metric=target_col,
+                            forecast_res=fc_output,
+                        )
+
+                        assistant_msg.query_result = {
+                            'data': {
+                                'columns': ['period', 'actual', 'forecast'],
+                                'rows': combined_rows,
+                                'row_count': len(combined_rows),
+                            },
+                            'total_rows': len(combined_rows),
+                            'forecast_data': fc_output,
+                        }
+                        assistant_msg.chart_config = {'type': 'line', 'x': 'period', 'y': 'forecast'}
+                        assistant_msg.message_type = ChatMessage.MessageType.FORECAST
+                        assistant_msg.content = nl_explanation
+                    else:
+                        assistant_msg.content = f"Could not construct time-series aggregation for {response.get('target_metric', 'metric')}."
+                else:
+                    nl_explanation = engine.explain_sql_results(
+                        user_message=serializer.validated_data['message'],
+                        sql_query=response['sql_query'],
+                        query_result=result,
+                    )
+                    assistant_msg.query_result = result
+                    assistant_msg.message_type = ChatMessage.MessageType.TABLE
+                    assistant_msg.content = nl_explanation
+
                 assistant_msg.save()
 
                 AuditLog.objects.create(
                     user=request.user,
                     action=AuditLog.ActionType.QUERY,
-                    description=f"NL-to-SQL: {serializer.validated_data['message'][:100]}",
+                    description=f"{response.get('type', 'query').upper()}: {serializer.validated_data['message'][:100]}",
                     resource_type='dataset',
                     resource_id=str(dataset.id),
                 )

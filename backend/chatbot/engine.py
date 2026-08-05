@@ -484,7 +484,18 @@ Respond with JSON:
                 'confidence': 1.0,
             }
 
-        # Target metric is specified -> generate forecasting parameters
+        # Target metric is specified -> generate aggregated time-series SQL and parameters
+        date_cols = [c for c in col_names if col_types.get(c) == 'datetime' or 'date' in c.lower() or 'time' in c.lower()]
+        date_col = date_cols[0] if date_cols else (col_names[0] if col_names else 'Date')
+
+        target_col = metric_cols[0] if metric_cols else 'Revenue'
+        for c in metric_cols:
+            if c.lower() in msg_lower:
+                target_col = c
+                break
+
+        aggregated_sql = f"SELECT strftime('%Y-%m', `{date_col}`) AS month, SUM(`{target_col}`) AS `{target_col}` FROM df WHERE `{date_col}` IS NOT NULL AND `{date_col}` != '' GROUP BY month ORDER BY month"
+
         prompt = f"""{self.SYSTEM_PROMPT}
 
 Dataset Context:
@@ -492,9 +503,11 @@ Dataset Context:
 
 User Request: {message}
 
-The user specified a target metric for forecasting. Provide time-series forecasting guidance and parameters.
+The user specified target metric '{target_col}' for forecasting. Generate a time-series aggregation query.
+Default aggregated SQL: {aggregated_sql}
+
 Respond with JSON:
-{{"type": "forecast", "content": "forecasting advice", "recommended_method": "holt_winters", "suggested_columns": {{"target": "col", "date": "col"}}, "suggested_horizon": 30}}"""
+{{"type": "forecast", "content": "Forecasting time-series trend", "sql_query": "{aggregated_sql}", "recommended_method": "holt_winters", "suggested_columns": {{"target": "{target_col}", "date": "month"}}, "suggested_horizon": 6}}"""
 
         messages = [{'role': 'system', 'content': prompt}]
         for msg in chat_history[-settings.CHAT_MAX_CONTEXT_MESSAGES:]:
@@ -505,6 +518,10 @@ Respond with JSON:
         try:
             response_data = self._parse_response(result['content'])
             if response_data.get('type') in ['forecast', 'clarification']:
+                if not response_data.get('sql_query'):
+                    response_data['sql_query'] = aggregated_sql
+                response_data['target_metric'] = target_col
+                response_data['date_column'] = date_col
                 return response_data
         except Exception:
             pass
@@ -512,8 +529,49 @@ Respond with JSON:
         return {
             'type': 'forecast',
             'content': f"Forecasting guidance for {message}",
+            'sql_query': aggregated_sql,
+            'target_metric': target_col,
+            'date_column': date_col,
             'recommended_method': 'holt_winters',
         }
+
+    def explain_forecast_results(
+        self,
+        user_message: str,
+        target_metric: str,
+        forecast_res: Dict[str, Any],
+    ) -> str:
+        """Synthesize executive natural language summary of forecasting results."""
+        try:
+            hist_vals = forecast_res.get('historical', {}).get('values', [])
+            fc_vals = forecast_res.get('forecast', {}).get('values', [])
+
+            last_hist = hist_vals[-1] if hist_vals else 0
+            first_fc = fc_vals[0] if fc_vals else 0
+            last_fc = fc_vals[-1] if fc_vals else 0
+
+            growth_pct = 0.0
+            if last_hist > 0 and last_fc > 0:
+                growth_pct = ((last_fc - last_hist) / last_hist) * 100
+
+            prompt = f"""You are a senior data analyst summarizing time-series forecasting results for executive decision-makers.
+
+User Request: {user_message}
+Forecasted Metric: {target_metric}
+Recent Historical Value: {last_hist}
+Projected End Value: {last_fc}
+Calculated Projected Growth/Decline: {growth_pct:+.1f}% over horizon
+
+Write a concise 2-3 sentence business summary explaining the forecast trend, expected percentage change, and trend stability over the coming period. Avoid technical SQL jargon or descriptions of data transformations."""
+
+            res = self.llm.generate([{'role': 'user', 'content': prompt}])
+            summary = res.get('content', '').strip()
+            if summary and not summary.startswith('Error:'):
+                return summary
+        except Exception as e:
+            logger.error(f"Error in explain_forecast_results: {e}")
+
+        return f"{target_metric} is forecast to change by {growth_pct:+.1f}% over the projected horizon."
 
     def _handle_general_query(
         self, message: str, schema_context: str, chat_history: List[Dict], dataset_profile: Optional[Dict] = None

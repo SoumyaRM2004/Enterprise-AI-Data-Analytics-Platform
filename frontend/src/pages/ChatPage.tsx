@@ -274,6 +274,48 @@ export default function ChatPage() {
     const rows = data.rows;
     const cols = data.columns;
 
+    if (cols.includes('actual') && cols.includes('forecast')) {
+      const actualRows = rows.filter((r: any) => r.actual !== null && r.actual !== undefined);
+      const forecastRows = rows.filter((r: any) => r.forecast !== null && r.forecast !== undefined);
+
+      const lastActual = actualRows.length > 0 ? Number(actualRows[actualRows.length - 1].actual) : 0;
+      const forecastPeak = forecastRows.length > 0 ? Math.max(...forecastRows.map((r: any) => Number(r.forecast) || 0)) : 0;
+      const endForecast = forecastRows.length > 0 ? Number(forecastRows[forecastRows.length - 1].forecast) : 0;
+
+      const growth = lastActual > 0 ? ((endForecast - lastActual) / lastActual) * 100 : 0;
+
+      return [
+        {
+          label: 'Recent Actual',
+          value: formatValue(lastActual, 'revenue'),
+          subtext: 'Last historical period',
+          icon: Clock,
+          color: 'border-blue-200 bg-blue-50/50 text-blue-900',
+        },
+        {
+          label: 'Forecast Peak',
+          value: formatValue(forecastPeak, 'revenue'),
+          subtext: 'Projected high',
+          icon: TrendingUp,
+          color: 'border-emerald-200 bg-emerald-50/50 text-emerald-900',
+        },
+        {
+          label: 'Forecast Horizon',
+          value: `${forecastRows.length} Periods`,
+          subtext: `~${forecastRows.length * 30} days ahead`,
+          icon: Sparkles,
+          color: 'border-purple-200 bg-purple-50/50 text-purple-900',
+        },
+        {
+          label: 'Projected Growth',
+          value: `${growth >= 0 ? '+' : ''}${growth.toFixed(1)}%`,
+          subtext: 'End of horizon vs actual',
+          icon: DollarSign,
+          color: growth >= 0 ? 'border-indigo-200 bg-indigo-50/50 text-indigo-900' : 'border-amber-200 bg-amber-50/50 text-amber-900',
+        },
+      ];
+    }
+
     const catCol = cols.find((c: string) => typeof rows[0][c] === 'string' || c.toLowerCase().includes('id') || c.toLowerCase().includes('code')) || cols[0];
     const numCol = cols.find((c: string) => c !== catCol && typeof rows[0][c] === 'number') || cols.find((c: string) => typeof rows[0][c] === 'number');
 
@@ -398,6 +440,56 @@ export default function ChatPage() {
     if (!data || !data.rows || data.rows.length === 0 || !data.columns) return null;
 
     const cols = data.columns;
+
+    if (cols.includes('actual') && cols.includes('forecast')) {
+      const labels = data.rows.map((r: any) => String(r.period || ''));
+      const actuals = data.rows.map((r: any) => (r.actual !== null && r.actual !== undefined ? Number(r.actual) : null));
+      const forecasts = data.rows.map((r: any) => (r.forecast !== null && r.forecast !== undefined ? Number(r.forecast) : null));
+
+      const forecastChartData = {
+        labels,
+        datasets: [
+          {
+            label: 'Historical Actuals',
+            data: actuals,
+            borderColor: 'rgb(37, 99, 235)',
+            backgroundColor: 'rgba(59, 130, 246, 0.15)',
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2.5,
+            pointRadius: 3,
+          },
+          {
+            label: 'Forecast Trajectory',
+            data: forecasts,
+            borderColor: 'rgb(147, 51, 234)',
+            backgroundColor: 'rgba(168, 85, 247, 0.15)',
+            borderDash: [6, 6],
+            fill: true,
+            tension: 0.3,
+            borderWidth: 2.5,
+            pointRadius: 4,
+          },
+        ],
+      };
+
+      return (
+        <div className="border border-indigo-100 bg-gradient-to-b from-indigo-50/30 to-white rounded-xl p-4 shadow-sm space-y-2">
+          <div className="flex items-center justify-between">
+            <h4 className="text-xs font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+              <TrendingUp size={14} className="text-indigo-600" />
+              <span>Historical vs. Projected Forecast Trajectory</span>
+            </h4>
+            <span className="text-[10px] font-semibold text-indigo-700 bg-indigo-100 px-2 py-0.5 rounded-full">
+              Holt-Winters Engine
+            </span>
+          </div>
+          <div className="h-64">
+            <Line data={forecastChartData} options={{ responsive: true, maintainAspectRatio: false }} />
+          </div>
+        </div>
+      );
+    }
     const config = msg.chart_config || {};
 
     let xCol = config.x && cols.includes(config.x) ? config.x : cols.find((c: string) => typeof data.rows[0][c] === 'string');
