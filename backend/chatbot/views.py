@@ -110,6 +110,7 @@ class ChatSendView(APIView):
             metadata={
                 'key_findings': response.get('key_findings', []),
                 'follow_up_questions': response.get('follow_up_questions', []),
+                'options': response.get('options', []),
                 'confidence': response.get('confidence', 1.0),
                 'reasoning': response.get('reasoning', ''),
             },

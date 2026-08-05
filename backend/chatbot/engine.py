@@ -411,9 +411,47 @@ Respond with JSON:
         }
 
     def _handle_forecast_request(
-        self, message: str, schema_context: str, profile: Dict, chat_history: List[Dict]
+        self, message: str, schema_context: str, profile: Optional[Dict], chat_history: List[Dict]
     ) -> Dict[str, Any]:
-        """Handle forecasting requests."""
+        """Handle forecasting requests with mandatory target metric verification."""
+        msg_lower = message.lower()
+        col_names = profile.get('column_names', []) if profile else []
+        col_types = profile.get('column_types', {}) if profile else {}
+
+        # Identify numeric / metric columns from dataset schema
+        numeric_cols = [c for c in col_names if col_types.get(c) in ['integer', 'float']]
+        if not numeric_cols:
+            numeric_cols = col_names
+
+        # Check if the user message explicitly mentions any available column or metric terms
+        has_metric = False
+        for c in col_names:
+            if c.lower() in msg_lower:
+                has_metric = True
+                break
+
+        metric_synonyms = ['revenue', 'sales', 'quantity', 'amount', 'orders', 'price', 'total', 'profit', 'spend', 'demand', 'count', 'value']
+        if not has_metric:
+            for s in metric_synonyms:
+                if s in msg_lower:
+                    has_metric = True
+                    break
+
+        # If target metric is missing, DO NOT guess. Return a clarification response immediately.
+        if not has_metric:
+            options = [c.replace('_', ' ').title() for c in numeric_cols[:4]]
+            if not options:
+                options = ["Revenue", "Quantity Sold", "Number of Orders", "Average Order Value"]
+
+            return {
+                'type': 'clarification',
+                'content': 'Which metric would you like to forecast?',
+                'options': options,
+                'follow_up_questions': options,
+                'confidence': 1.0,
+            }
+
+        # Target metric is specified -> generate forecasting parameters
         prompt = f"""{self.SYSTEM_PROMPT}
 
 Dataset Context:
@@ -421,9 +459,9 @@ Dataset Context:
 
 User Request: {message}
 
-Provide time-series forecasting guidance and parameters.
+The user specified a target metric for forecasting. Provide time-series forecasting guidance and parameters.
 Respond with JSON:
-{{"type": "forecast", "content": "forecasting advice", "recommended_method": "arima/holt_winters", "suggested_columns": {{"target": "col", "date": "col"}}, "suggested_horizon": 30}}"""
+{{"type": "forecast", "content": "forecasting advice", "recommended_method": "holt_winters", "suggested_columns": {{"target": "col", "date": "col"}}, "suggested_horizon": 30}}"""
 
         messages = [{'role': 'system', 'content': prompt}]
         for msg in chat_history[-settings.CHAT_MAX_CONTEXT_MESSAGES:]:
@@ -433,14 +471,14 @@ Respond with JSON:
 
         try:
             response_data = self._parse_response(result['content'])
-            if response_data.get('type') == 'forecast':
+            if response_data.get('type') in ['forecast', 'clarification']:
                 return response_data
         except Exception:
             pass
 
         return {
             'type': 'forecast',
-            'content': result['content'],
+            'content': f"Forecasting guidance for {message}",
             'recommended_method': 'holt_winters',
         }
 

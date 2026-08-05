@@ -707,6 +707,24 @@ export default function ChatPage() {
                             </div>
                           )}
 
+                          {/* Options for Clarification Responses */}
+                          {msg.metadata?.options?.length > 0 && (
+                            <div className="pt-2">
+                              <p className="text-xs font-bold text-indigo-700 uppercase tracking-wider mb-2">Select metric for analysis/forecast:</p>
+                              <div className="flex flex-wrap gap-2">
+                                {msg.metadata.options.map((opt: string, oIdx: number) => (
+                                  <button
+                                    key={oIdx}
+                                    onClick={() => sendMessage(`Forecast ${opt} for next quarter`)}
+                                    className="text-xs bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200 px-3.5 py-1.5 rounded-full font-semibold transition-all shadow-2xs hover:shadow-xs"
+                                  >
+                                    {opt}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
                           {/* 5. Context-Aware Follow-up Questions */}
                           {followups.length > 0 && (
                             <div className="pt-2 border-t border-gray-100">
