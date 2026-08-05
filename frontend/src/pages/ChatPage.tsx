@@ -158,13 +158,42 @@ export default function ChatPage() {
   };
 
   // --- Formatting Helpers ---
+  const formatPeriodLabel = (val: any): string => {
+    if (val === null || val === undefined) return '';
+    const str = String(val).trim();
+
+    if (/^\d{4}-\d{2}$/.test(str)) {
+      const [year, month] = str.split('-');
+      const mNum = parseInt(month, 10);
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      if (mNum >= 1 && mNum <= 12) {
+        return `${months[mNum - 1]} ${year}`;
+      }
+    }
+
+    if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+      try {
+        const d = new Date(str);
+        if (!isNaN(d.getTime())) {
+          return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        }
+      } catch {}
+    }
+
+    return str;
+  };
+
   const formatValue = (val: any, colName: string = ''): string => {
     if (val === null || val === undefined) return '-';
-    if (typeof val === 'number') {
-      const colLower = colName.toLowerCase();
+    const colLower = colName.toLowerCase();
 
+    if (['period', 'month', 'year', 'date', 'quarter', 'week'].includes(colLower) || /^\d{4}-\d{2}/.test(String(val))) {
+      return formatPeriodLabel(val);
+    }
+
+    if (typeof val === 'number') {
       // Currency columns
-      if (['price', 'cost', 'revenue', 'amount', 'total', 'spend', 'sales', 'profit', 'value', 'fee', 'charge', 'total_spend', 'total_sales'].some(k => colLower.includes(k))) {
+      if (['price', 'revenue', 'cost', 'sales', 'amount', 'total', 'profit', 'fee', 'spend', 'value', 'salary'].some(k => colLower.includes(k))) {
         if (Math.abs(val) >= 1_000_000) {
           return `$${(val / 1_000_000).toFixed(2)}M`;
         } else if (Math.abs(val) >= 1_000) {
@@ -319,6 +348,66 @@ export default function ChatPage() {
     const catCol = cols.find((c: string) => typeof rows[0][c] === 'string' || c.toLowerCase().includes('id') || c.toLowerCase().includes('code')) || cols[0];
     const numCol = cols.find((c: string) => c !== catCol && typeof rows[0][c] === 'number') || cols.find((c: string) => typeof rows[0][c] === 'number');
 
+    // Time-series trend KPI detection
+    const isTimeSeriesTrend = ['period', 'month', 'year', 'date', 'quarter', 'week'].includes(catCol.toLowerCase()) ||
+                              rows.some((r: any) => /^\d{4}-\d{2}/.test(String(r[catCol] || '')));
+
+    if (isTimeSeriesTrend && numCol) {
+      const totalVal = rows.reduce((acc: number, r: any) => acc + (Number(r[numCol]) || 0), 0);
+      const avgVal = totalVal / (rows.length || 1);
+
+      let peakRow = rows[0];
+      let lowRow = rows[0];
+      let maxV = Number(rows[0][numCol]) || 0;
+      let minV = Number(rows[0][numCol]) || 0;
+
+      rows.forEach((r: any) => {
+        const v = Number(r[numCol]) || 0;
+        if (v > maxV) { maxV = v; peakRow = r; }
+        if (v < minV) { minV = v; lowRow = r; }
+      });
+
+      let momGrowth = 0;
+      if (rows.length >= 2) {
+        const lastV = Number(rows[rows.length - 1][numCol]) || 0;
+        const prevV = Number(rows[rows.length - 2][numCol]) || 0;
+        if (prevV > 0) {
+          momGrowth = ((lastV - prevV) / prevV) * 100;
+        }
+      }
+
+      return [
+        {
+          label: `Total ${cleanTitle(numCol)}`,
+          value: formatValue(totalVal, numCol),
+          subtext: `Sum over ${rows.length} periods`,
+          icon: DollarSign,
+          color: 'border-blue-200 bg-blue-50/50 text-blue-900',
+        },
+        {
+          label: `Avg Monthly ${cleanTitle(numCol)}`,
+          value: formatValue(avgVal, numCol),
+          subtext: 'Average per period',
+          icon: Sparkles,
+          color: 'border-emerald-200 bg-emerald-50/50 text-emerald-900',
+        },
+        {
+          label: `Highest ${cleanTitle(numCol)} Month`,
+          value: formatValue(maxV, numCol),
+          subtext: formatPeriodLabel(peakRow[catCol]),
+          icon: TrendingUp,
+          color: 'border-indigo-200 bg-indigo-50/50 text-indigo-900',
+        },
+        {
+          label: `MoM Growth`,
+          value: `${momGrowth >= 0 ? '+' : ''}${momGrowth.toFixed(1)}%`,
+          subtext: 'Recent vs previous period',
+          icon: Clock,
+          color: momGrowth >= 0 ? 'border-purple-200 bg-purple-50/50 text-purple-900' : 'border-amber-200 bg-amber-50/50 text-amber-900',
+        },
+      ];
+    }
+
     const kpis = [];
 
     if (catCol && rows[0][catCol] !== undefined) {
@@ -442,7 +531,7 @@ export default function ChatPage() {
     const cols = data.columns;
 
     if (cols.includes('actual') && cols.includes('forecast')) {
-      const labels = data.rows.map((r: any) => String(r.period || ''));
+      const labels = data.rows.map((r: any) => formatPeriodLabel(r.period || ''));
       const actuals = data.rows.map((r: any) => (r.actual !== null && r.actual !== undefined ? Number(r.actual) : null));
       const forecasts = data.rows.map((r: any) => (r.forecast !== null && r.forecast !== undefined ? Number(r.forecast) : null));
 
@@ -500,8 +589,9 @@ export default function ChatPage() {
 
     if (!xCol || !yCol || xCol === yCol) return null;
 
-    const chartRows = data.rows.slice(0, 15);
-    const labels = chartRows.map((r: any) => String(r[xCol] ?? ''));
+    const chartRows = data.rows.slice(0, 30);
+    const rawLabels = chartRows.map((r: any) => String(r[xCol] ?? ''));
+    const labels = rawLabels.map((l: string) => formatPeriodLabel(l));
     const values = chartRows.map((r: any) => Number(r[yCol]) || 0);
 
     const maxVal = Math.max(...values);

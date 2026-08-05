@@ -47,6 +47,15 @@ Rules:
 - If required information is missing, return a "clarification" response instead of guessing.
 - Use standard SQLite SELECT queries (table name 'df'). Use only tables and columns from the provided schema. Never invent columns or tables.
 
+TIME-SERIES & TREND QUERY RULES:
+- Whenever the user asks for trends, time-series, historical performance, monthly/daily/yearly/quarterly metrics, or "[metric] over time":
+  1. DO NOT group by the raw datetime timestamp column (e.g., InvoiceDate, OrderDate). Grouping by raw timestamps creates thousands of single-invoice rows instead of a trend!
+  2. ALWAYS group by an aggregated time period!
+  3. Default to MONTHLY aggregation using strftime('%Y-%m', date_col) AS period unless user explicitly asks for daily (date(date_col)), weekly (strftime('%Y-%W', date_col)), quarterly, or yearly (strftime('%Y', date_col)).
+  4. Aggregate metric using SUM(), AVG(), or COUNT() (e.g. SUM(Price * Quantity) AS revenue or SUM(TotalPrice) AS revenue).
+  5. Filter out NULL dates: WHERE date_col IS NOT NULL AND date_col != ''
+  6. Order by period: ORDER BY period ASC.
+
 Your response MUST be a single valid JSON object:
 {
     "type": "sql" | "forecast" | "chart" | "insight" | "clarification" | "answer",
@@ -281,11 +290,35 @@ Rules:
             response_data['type'] = 'clarification'
             return response_data
 
+        is_trend = bool(re.search(r'\b(trend|trends|over time|monthly|daily|weekly|yearly|quarterly)\b', message, re.I))
+
         # SQL Repair Loop (up to 2 retries)
         max_retries = 2
         for attempt in range(max_retries + 1):
             if response_data.get('type') == 'sql' and response_data.get('sql_query'):
                 sql = response_data['sql_query'].strip()
+
+                # If trend query and SQL attempts to GROUP BY raw timestamp column without strftime/date:
+                if is_trend and dataset_profile:
+                    col_types = dataset_profile.get('column_types', {})
+                    date_cols = [c for c in available_cols if col_types.get(c) == 'datetime' or 'date' in c.lower() or 'time' in c.lower()]
+                    for d_col in date_cols:
+                        pattern = rf'GROUP BY\s+(`?{d_col}`?|df\.`?{d_col}`?)\b'
+                        if re.search(pattern, sql, re.I) and not re.search(rf'(strftime|date|substr)\s*\([^)]*{d_col}', sql, re.I):
+                            # Default to monthly unless daily/weekly/yearly specified
+                            granularity = f"strftime('%Y-%m', `{d_col}`)"
+                            if re.search(r'\bdaily\b|\bday\b', message, re.I):
+                                granularity = f"date(`{d_col}`)"
+                            elif re.search(r'\byearly\b|\byear\b', message, re.I):
+                                granularity = f"strftime('%Y', `{d_col}`)"
+                            elif re.search(r'\bweekly\b|\bweek\b', message, re.I):
+                                granularity = f"strftime('%Y-%W', `{d_col}`)"
+
+                            sql = re.sub(rf'\b{d_col}\b', f"{granularity} AS period", sql, count=1, flags=re.I)
+                            sql = re.sub(pattern, "GROUP BY period ORDER BY period", sql, flags=re.I)
+                            response_data['sql_query'] = sql
+                            break
+
                 is_valid, err_msg = SQLExecutor.validate_sql_ast(sql, available_cols)
 
                 if is_valid:
@@ -331,6 +364,15 @@ Rules:
                 return "The query executed successfully but returned no matching data records."
 
             sample_results = rows[:10]
+            is_trend = bool(re.search(r'\b(trend|trends|over time|monthly|daily|weekly|yearly|quarterly)\b', user_message, re.I))
+            trend_instruction = ""
+            if is_trend:
+                trend_instruction = (
+                    "\nNote: This is a time-series trend analysis over aggregated periods. "
+                    "Analyze the overall trajectory, peak period, lowest period, and direction (increase/decline/stability). "
+                    "Do NOT describe individual invoice transactions or database field names."
+                )
+
             prompt = f"""You are a senior data analyst explaining SQL query results to a decision-maker.
 
 User Question: {user_message}
@@ -339,6 +381,7 @@ Total Matching Records: {total_rows:,}
 Columns Returned: {cols}
 Result Sample (First {len(sample_results)} rows):
 {json.dumps(sample_results, indent=2, default=str)}
+{trend_instruction}
 
 Write a concise 2-3 sentence business summary explaining the key findings from these results in direct answer to the user's question. Focus on key numbers, top values, or notable patterns."""
 
